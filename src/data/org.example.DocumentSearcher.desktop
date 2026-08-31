@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Document Searcher
+GenericName=Document Search
+Comment=Search through documents in a folder
+Exec=flatpak run org.example.DocumentSearcher
+Icon=org.example.DocumentSearcher
+Terminal=false
+Categories=Utility;TextTools;Office;
+StartupNotify=true
+MimeType=text/plain;application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/pdf;text/markdown;application/rtf;application/vnd.oasis.opendocument.text;
+Keywords=search;document;file;text;ocr;

@@ -1,0 +1,103 @@
+{
+  "app-id": "org.example.DocumentSearcher",
+  "runtime": "org.freedesktop.Platform",
+  "runtime-version": "23.08",
+  "sdk": "org.freedesktop.Sdk",
+  "command": "document_searcher",
+  "finish-args": [
+    "--share=network",
+    "--socket=wayland",
+    "--socket=fallback-x11",
+    "--device=dri",
+    "--talk-name=org.freedesktop.portal.Desktop",
+    "--talk-name=org.freedesktop.portal.FileChooser",
+    "--env=TESSDATA_PREFIX=/app/share/tessdata"
+  ],
+  "cleanup": [
+    "/include",
+    "/lib/pkgconfig",
+    "/share/man",
+    "*.a",
+    "*.la",
+    "/share/gtk-doc"
+  ],
+  "modules": [
+    {
+      "name": "tesseract-ocr",
+      "buildsystem": "meson",
+      "config-opts": [
+        "-Dtraining-tools=disabled",
+        "-Ddoxygen=disabled",
+        "-Dcplusplus=disabled",
+        "-Dsw=disabled"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://github.com/tesseract-ocr/tesseract/archive/refs/tags/5.3.3.tar.gz",
+          "sha256": "b441b1c6b8b7f7f8e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6",
+          "dest-filename": "tesseract-5.3.3.tar.gz"
+        },
+        {
+          "type": "archive",
+          "url": "https://github.com/tesseract-ocr/leptonica/archive/refs/tags/1.83.1.tar.gz",
+          "sha256": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
+          "dest-filename": "leptonica-1.83.1.tar.gz"
+        }
+      ]
+    },
+    {
+      "name": "tessdata-eng",
+      "buildsystem": "simple",
+      "build-commands": [
+        "mkdir -p /app/share/tessdata",
+        "cp eng.traineddata /app/share/tessdata/"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata",
+          "sha256": "f5b5e5f5e5f5e5f5e5f5e5f5e5f5e5f5e5f5e5f5e5f5e5f5e5f5e5f5e5f5e5f5",
+          "dest-filename": "eng.traineddata"
+        }
+      ]
+    },
+    {
+      "name": "tessdata-rus",
+      "buildsystem": "simple",
+      "build-commands": [
+        "mkdir -p /app/share/tessdata",
+        "cp rus.traineddata /app/share/tessdata/"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://github.com/tesseract-ocr/tessdata_fast/raw/main/rus.traineddata",
+          "sha256": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
+          "dest-filename": "rus.traineddata"
+        }
+      ]
+    },
+    {
+      "name": "document_searcher",
+      "buildsystem": "cargo",
+      "build-options": {
+        "env": {
+          "CARGO_NET_OFFLINE": "true",
+          "TESSDATA_PREFIX": "/app/share/tessdata",
+          "RUSTFLAGS": "-C link-arg=-Wl,-rpath,'$ORIGIN/../lib'"
+        }
+      },
+      "sources": [
+        {
+          "type": "dir",
+          "path": ".."
+        },
+        {
+          "type": "json",
+          "path": "generated-sources.json"
+        }
+      ]
+    }
+  ]
+}

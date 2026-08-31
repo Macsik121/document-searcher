@@ -1,0 +1,62 @@
+/* Document Searcher - Custom Styles */
+
+.result-number {
+  font-weight: bold;
+  font-size: 1.1em;
+}
+
+.file-link {
+  text-decoration: underline;
+  color: @accent_color;
+}
+
+.file-link:hover {
+  color: @accent_bg_color;
+}
+
+.context-text {
+  font-family: monospace;
+  font-size: 0.9em;
+  color: @foreground_color;
+  background-color: @shade_color;
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin: 2px 0;
+}
+
+.search-status-success {
+  color: @success_color;
+  font-weight: bold;
+}
+
+.search-status-searching {
+  color: @accent_color;
+}
+
+.sidebar-header {
+  border-bottom: 1px solid @borders_color;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+}
+
+#load_more_btn {
+  min-width: 150px;
+  padding: 8px 24px;
+}
+
+#search_entry {
+  min-width: 400px;
+}
+
+#files_list, #results_list {
+  outline: none;
+}
+
+#files_list row:selected, #results_list row:selected {
+  background-color: @accent_bg_color;
+}
+
+#main_paned separator {
+  min-width: 2px;
+  background-color: @borders_color;
+}

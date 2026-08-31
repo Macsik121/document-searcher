@@ -1,0 +1,50 @@
+[package]
+name = "document_searcher"
+version = "0.1.0"
+edition = "2021"
+description = "Document search application for Alt Linux"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/example/document_searcher"
+
+[dependencies]
+# Relm4 & GTK
+relm4 = { version = "0.7", features = ["gtk4-0.8", "libadwaita-0.8"] }
+gtk4 = { version = "0.8", features = ["v4_10"] }
+libadwaita = { version = "0.8", features = ["v1_4"] }
+gio = { version = "0.18", features = ["v2_76"] }
+glib = { version = "0.18", features = ["v2_76"] }
+blueprint = "0.9"
+
+# Async
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "sync"] }
+
+# Portals
+ashpd = "0.5"
+
+# Document processing
+tesseract-rs = "0.3"
+docx-rs = "0.4"
+pdf-extract = "0.7"
+walkdir = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+anyhow = "1"
+thiserror = "1"
+dirs = "5"
+
+[build-dependencies]
+blueprint-compiler = "0.9"
+gresource = "0.12"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
