@@ -1,0 +1,133 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Поиск по файлам</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Подключение современного шрифта Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body class="bg-white text-gray-800 h-screen w-full flex overflow-hidden">
+
+    <!-- Левая панель (Обозреватель файлов) -->
+    <aside class="w-80 bg-gray-50 border-r border-gray-200 p-6 flex flex-col h-full overflow-y-auto">
+        
+        <!-- Информация о директории -->
+        <div class="mb-6">
+            <div class="font-mono text-sm text-gray-600 bg-gray-200 px-3 py-1.5 rounded-md inline-block mb-2">
+                Папка: /home/documents
+            </div>
+            <p class="text-sm text-gray-500 font-medium">Найдено 3 файла</p>
+        </div>
+
+        <!-- Дерево файлов -->
+        <div class="flex-1">
+            <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Файлы в папке</h3>
+            <ul class="space-y-1">
+                <!-- Файл Word -->
+                <li class="flex items-center space-x-2.5 p-2 hover:bg-gray-200 rounded-md cursor-pointer transition-colors group">
+                    <svg class="w-5 h-5 text-blue-600 opacity-80 group-hover:opacity-100" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                    </svg>
+                    <span class="text-sm text-gray-700 font-medium">some_doc.docx</span>
+                </li>
+
+                <!-- Активный Файл Word (с которым ищем) -->
+                <li class="flex items-center space-x-2.5 p-2 hover:bg-gray-200 rounded-md cursor-pointer transition-colors group bg-gray-200/50">
+                    <svg class="w-5 h-5 text-blue-600 opacity-80 group-hover:opacity-100" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                    </svg>
+                    <span class="text-sm text-gray-900 font-medium">report_2026.docx</span>
+                </li>
+
+                <!-- Раскрытая папка -->
+                <li>
+                    <div class="flex items-center space-x-1.5 p-2 hover:bg-gray-200 rounded-md cursor-pointer transition-colors">
+                        <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                        <svg class="w-5 h-5 text-yellow-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
+                        </svg>
+                        <span class="text-sm text-gray-700 font-medium">presentations</span>
+                    </div>
+                    <!-- Вложенные файлы -->
+                    <ul class="ml-7 mt-1 border-l border-gray-200 pl-2 space-y-1">
+                        <li class="flex items-center space-x-2.5 p-2 hover:bg-gray-200 rounded-md cursor-pointer transition-colors group">
+                            <svg class="w-5 h-5 text-red-500 opacity-80 group-hover:opacity-100" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                            </svg>
+                            <span class="text-sm text-gray-700 font-medium">day_of_opened_doors.pdf</span>
+                        </li>
+                    </ul>
+                </li>
+            </ul>
+        </div>
+    </aside>
+
+    <!-- Правая панель (Рабочая область поиска) -->
+    <main class="flex-1 p-10 bg-white overflow-y-auto">
+        <div class="max-w-4xl mx-auto mt-8">
+            
+            <!-- Заголовки -->
+            <h1 class="text-3xl font-bold text-gray-900 mb-2">Напишите, что хотите найти!</h1>
+            <p class="text-gray-500 mb-8 text-base">Поиск будет произведён по всем файлам, найденным в папке</p>
+
+            <!-- Строка поиска -->
+            <div class="flex shadow-sm rounded-lg w-full max-w-2xl group">
+                <input 
+                    type="text" 
+                    value="a substring"
+                    placeholder="Введите строку поиска..." 
+                    class="flex-1 border border-gray-300 rounded-l-lg p-3.5 text-base outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-gray-800"
+                />
+                <button class="bg-blue-600 text-white px-7 rounded-r-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 transition-colors flex items-center justify-center cursor-pointer">
+                    <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Разделитель и блок результатов -->
+            <div class="mt-12 pt-8 border-t border-gray-100 max-w-3xl">
+                <h2 class="text-xl font-semibold mb-5 text-gray-800 flex items-center gap-2">
+                    Результаты
+                    <span class="bg-blue-100 text-blue-700 text-sm py-0.5 px-2.5 rounded-full font-medium">1</span>
+                </h2>
+
+                <!-- Карточка результата -->
+                <div class="border border-gray-200 rounded-xl p-5 shadow-sm hover:shadow-md hover:border-blue-300 hover:bg-blue-50/30 cursor-pointer transition-all flex flex-col gap-3 group">
+                    
+                    <!-- Заголовок файла в карточке -->
+                    <div class="flex items-center space-x-3">
+                        <div class="bg-blue-100 p-2 rounded-lg text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                            <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-gray-900 text-lg group-hover:text-blue-700 transition-colors">report_2026.docx</h3>
+                            <p class="text-xs text-gray-400 font-mono mt-0.5">/home/documents/report_2026.docx</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Сниппет (фрагмент текста) -->
+                    <p class="text-gray-600 text-sm leading-relaxed pl-12">
+                        ...20 symbols before or less... 
+                        <mark class="bg-yellow-200 px-1.5 py-0.5 rounded-sm text-gray-900 font-medium shadow-sm">a substring</mark> 
+                        ...20 symbols after or less...
+                    </p>
+                </div>
+
+            </div>
+        </div>
+    </main>
+
+</body>
+</html>

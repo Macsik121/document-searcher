@@ -1,0 +1,109 @@
+The user is asking for correct commands to install specific packages that failed: `leptonica-devel`, `libopenssl-devel`, `cargo`, and `rustup`.
+The context implies a Linux environment (likely openSUSE/SLES because of the `-devel` naming convention and `zypper`, or possibly Fedora/RHEL with `dnf`).
+The user says "even though you've done a great job already," implying I might have given commands previously that didn't work, or they are just being polite. Since I don't have the previous turn history, I must provide the most robust, standard commands for the most likely distros (openSUSE vs Fedora/RHEL vs Alpine).Since you have `-devel` packages, you are almost certainly on an **RPM-based distro** (openSUSE, Fedora, RHEL, Rocky, Alma). The package names differ slightly between `zypper` (openSUSE/SLE) and `dnf` (Fedora/RHEL).
+
+Here are the corrected, specific commands for each scenario.
+
+---
+
+### Option A: openSUSE (Leap, Tumbleweed) / SLES — **Most likely given your package names**
+`leptonica-devel` and `libopenssl-devel` are the **exact** correct names here.
+
+```bash
+# 1. Refresh repos & install system deps
+sudo zypper refresh && sudo zypper install leptonica-devel libopenssl-devel
+
+# 2. Install Rust toolchain (do NOT use 'cargo' or 'rustup' packages from distro repos if possible)
+# The distro 'rustup' package is often outdated. Use the official installer instead:
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+# 3. Load cargo/rustc into current shell immediately
+source "$HOME/.cargo/env"
+
+# 4. Verify
+cargo --version && rustc --version
+```
+
+> **Why not `sudo zypper install cargo rustup`?**  
+> On openSUSE, `rustup` in the default repos is frequently old enough to fail installing modern toolchains. The official script (`sh.rustup.rs`) is the supported way.
+
+---
+
+### Option B: Fedora / RHEL 9+ / Rocky / Alma / CentOS Stream
+**Package names are different here:** `leptonica-devel` → `leptonica-devel` (same), `libopenssl-devel` → `openssl-devel`.
+
+```bash
+# 1. Install system deps (Note: openssl-devel, not libopenssl-devel)
+sudo dnf install leptonica-devel openssl-devel
+
+# 2. Install Rust via official toolchain (Recommended over dnf install rust cargo)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+
+# 3. Verify
+cargo --version
+```
+
+> **If you strictly want DNF modules (not recommended for Rust dev):**
+> `sudo dnf module install rust-toolset` (This gives you `rustc`, `cargo` via `scl` enablement, but `rustup` is still better for management).
+
+---
+
+### Option C: RHEL 8 / CentOS 8 / Old Clones (EOL / Maintenance)
+`leptonica` is often missing from base repos. You need **EPEL** and **PowerTools/CRB**.
+
+```bash
+# 1. Enable required repos
+sudo dnf install -y epel-release
+sudo dnf config-manager --set-enabled powertools  # RHEL 8 / CentOS 8
+# OR for Rocky/Alma 8:
+sudo dnf config-manager --set-enabled crb
+
+# 2. Install deps
+sudo dnf install leptonica-devel openssl-devel
+
+# 3. Install Rust (Official installer)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+```
+
+---
+
+### Option D: Alpine Linux (If you are in a container)
+Package suffix is `-dev`, not `-devel`.
+
+```bash
+apk add leptonica-dev openssl-dev rust cargo
+# Note: Alpine packages 'rust' and 'cargo' together; rustup is not standard here.
+```
+
+---
+
+### Troubleshooting "Package Not Found" for Leptonica
+If **Option A or B** fails saying `leptonica-devel` not found:
+
+1.  **openSUSE:** It might be in `graphics` repo.
+    ```bash
+    sudo zypper addrepo https://download.opensuse.org/repositories/graphics/openSUSE_Leap_15.6/graphics.repo  # Adjust version!
+    sudo zypper refresh && sudo zypper install leptonica-devel
+    ```
+2.  **Fedora/RHEL:** Enable `crb` (CodeReady Builder) or `powertools`.
+    ```bash
+    sudo dnf config-manager --set-enabled crb  # RHEL 9 / Rocky 9 / Alma 9
+    # OR
+    sudo dnf config-manager --set-enabled powertools # Older
+    sudo dnf install leptonica-devel
+    ```
+
+---
+
+### Summary Checklist
+| Package | openSUSE (`zypper`) | Fedora/RHEL (`dnf`) | Alpine (`apk`) |
+| :--- | :--- | :--- | :--- |
+| Leptonica | `leptonica-devel` | `leptonica-devel` | `leptonica-dev` |
+| OpenSSL | `libopenssl-devel` | `openssl-devel` | `openssl-dev` |
+| Rust/Cargo | **Use `rustup.rs` script** | **Use `rustup.rs` script** | `rust` `cargo` |
+| Rustup | **Use `rustup.rs` script** | **Use `rustup.rs` script** | N/A |
+
+**Run the block matching your OS.** If you aren't sure, run `cat /etc/os-release` and paste the `ID=` and `VERSION_ID=` lines here.
+The 

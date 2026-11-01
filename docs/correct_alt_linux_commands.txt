@@ -1,0 +1,107 @@
+The user is on Alt Linux and the build instructions are failing because:
+1. The `dnf` commands are failing (Alt Linux uses `apt` or has its own package manager)
+2. The `apt` commands are also failing (Alt Linux is not Debian-based)
+
+Alt Linux is a Russian Linux distribution that uses `apt-rpm` (APT with RPM packages). The package manager is `apt-get` or `apt`, but the package names are different from Debian/Ubuntu.
+
+Let me help them figure out the correct package names for Alt Linux.Alt Linux uses **`apt` with RPM packages** (apt-rpm), not dnf or Debian's apt. The package names differ from both Fedora and Ubuntu.
+
+## First, check what's available
+
+```bash
+# Update package cache
+sudo apt-get update
+
+# Search for actual package names on Alt Linux
+apt-cache search gtk4 | head -20
+apt-cache search libadwaita | head -10
+apt-cache search tesseract | head -10
+apt-cache search blueprint-compiler
+apt-cache search cargo rustup
+```
+
+## Likely Alt Linux package names
+
+Based on Alt Linux's RPM-based repositories, try these:
+
+```bash
+# Core build tools
+sudo apt-get install -y gcc gcc-c++ make cmake pkgconfig
+
+# GTK4 / libadwaita (Alt Linux naming)
+sudo apt-get install -y libgtk4-devel libadwaita-devel
+
+# Blueprint compiler
+sudo apt-get install -y blueprint-compiler
+
+# GLib
+sudo apt-get install -y glib2-devel
+
+# Tesseract OCR
+sudo apt-get install -y tesseract-devel leptonica-devel
+
+# OpenSSL
+sudo apt-get install -y libopenssl-devel
+
+# Flatpak
+sudo apt-get install -y flatpak flatpak-builder
+
+# Rust - try distro package first, else use rustup
+sudo apt-get install -y cargo rustup
+# OR if too old:
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+## Tesseract language packs
+
+```bash
+# Try these names
+apt-cache search tesseract-lang
+# Then install whatever appears, e.g.:
+sudo apt-get install -y tesseract-lang-en tesseract-lang-ru
+# Or manually download to /usr/share/tessdata/
+```
+
+## If packages are missing / too old
+
+Alt Linux 10.x (based on p10) may have older GTK. Check versions:
+
+```bash
+# Check GTK4 version available
+apt-cache policy libgtk4-devel
+
+# If < 4.10, you may need Flatpak SDK approach instead
+```
+
+## Recommended: Use Flatpak Builder (bypasses system deps)
+
+Since you're building a Flatpak anyway, **skip native deps** and build entirely in Flatpak:
+
+```bash
+# 1. Only need flatpak-builder on host
+sudo apt-get install -y flatpak-builder
+
+# 2. Add Flathub
+flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+
+# 3. Install SDK (one-time)
+flatpak install flathub org.freedesktop.Sdk//23.08 org.freedesktop.Platform//23.08
+
+# 4. Build using flatpak-builder (uses SDK, not host libs)
+cd document_searcher
+flatpak-builder --force-clean --install-deps-from=flathub   flatpak/build-dir flatpak/org.example.DocumentSearcher.json
+```
+
+This is **the most reliable path on Alt Linux** — the Flatpak SDK provides all correct GTK4/libadwaita/tesseract versions regardless of host distro.
+
+---
+
+## Quick test: Can you run the flatpak build now?
+
+```bash
+cd document_searcher
+ls flatpak/org.example.DocumentSearcher.json  # verify manifest exists
+flatpak-builder --force-clean --install-deps-from=flathub   flatpak/build-dir flatpak/org.example.DocumentSearcher.json
+```
+
+If that works, you're done — no system GTK/tesseract packages needed.
