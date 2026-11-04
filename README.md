@@ -1,4 +1,4 @@
-# document-searcher
+# Document searcher
 
 The Document Searcher App for Alt Linux with graphical interface designed to solve my mother's industrial case.
 
@@ -20,5 +20,5 @@ You now have the structural perimeter of the application built. Run the followin
 
 
 
-Once that successfully compiles, the C-dependencies are locked in. We can then confidently write the \*\*Tokio Worker \& Debouncer\*\* (the backend logic) knowing the OCR extraction calls will safely compile.
+Once that successfully compiles, the C-dependencies are locked in. We can then confidently write the **Tokio Worker & Debouncer** (the backend logic) knowing the OCR extraction calls will safely compile.
 
