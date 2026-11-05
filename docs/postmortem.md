@@ -138,3 +138,41 @@ Desktop-часть пока нельзя считать готовым прил�
 На текущем этапе проект имеет полезное и достаточно хорошо тестируемое ядро поиска, scanner, native extraction, worker prototype и CLI. Это уже не пустой каркас. Однако GTK-приложение ещё не является интегрированным runnable MVP: между текущим core/worker и старым Relm4 UI отсутствует безопасный bridge, persistence и законченный Flatpak pipeline.
 
 На Windows разумно продолжать разработку и тестирование core/CLI. Финальную desktop/OCR/Flatpak интеграцию следует проверять в ALT Linux VM после установки GTK4, Libadwaita, Blueprint Compiler, GLib development tools, portal, Tesseract/Leptonica и Flatpak Builder.
+
+
+
+Работа завершена. Финальная сводка.
+
+Что сделано в этом этапе
+
+Core (Windows):
+- model/state.rs — добавлен AppSettings с default /home/documents, счётчик unreadable_entries, метод set_scan_path, тест на сброс при смене каталога.
+- model/actions.rs — WorkerEvent/AppMsg расширены: ScanProgress, unreadable_entries в ScanCompleted, query в SearchCancelled.
+- model/worker.rs — ScanCompleted передаёт unreadable_entries.
+- Cargo.toml — исправлена ошибка сборки: убран несуществующий feature gtk4-0-8 у Relm4.
+- Cargo.lock — сгенерирован Cargo.
+
+Документация:
+- docs/postmortem.md — полный разбор: что было, что реализовано, что не проверено, что осталось до core/desktop/Flatpak MVP.
+- docs/ALT-LINUX-RUN.md — инструкции по запуску core/CLI, OCR и будущей desktop/Flatpak сборки на ALT Linux, плюс диагностика ошибки Windows policy 4551.
+- README.md — добавлены точные команды с --manifest-path и временным PATH для Cargo.
+
+Что блокировало проверку
+
+cargo test на Windows не завершился: политика управления приложениями блокирует запуск Cargo build scripts (os error 4551 для anyhow и bzip2-sys). Это не падение тестов проекта — бинарник не был собран. Проверить нужно в ALT Linux VM или разрешить build scripts в Windows policy.
+
+Команды для самостоятельного запуска
+
+На Windows (после установки Rust, новый терминал):
+$env:Path = "$env:USERPROFILE\.cargo\bin;" + $env:Path
+cargo test --manifest-path .\src\Cargo.toml --lib --no-default-features
+cargo run --manifest-path .\src\Cargo.toml --no-default-features -- scan <directory>
+cargo run --manifest-path .\src\Cargo.toml --no-default-features -- search <directory> <query>
+
+На ALT Linux — см. docs/ALT-LINUX-RUN.md (core/CLI готов; desktop/Flatpak требует интеграции, описанной в docs/postmortem.md).
+
+Что осталось (не этот этап)
+
+Desktop MVP: bridge worker↔Relm4, GSettings schema, portal chooser, исправление search_bar.rs debounce, открытие файлов через GIO URI, единый Blueprint layout. Flatpak: унификация app-id, generated-sources, schema/resource install, tessdata eng+rus. Всё это зафиксировано в postmortem.
+
+Перенос src/specs → docs/specs сохранён, пользовательские документы не тронуты.
