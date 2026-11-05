@@ -1,30 +1,54 @@
 use std::path::PathBuf;
+
 use crate::model::state::{FileEntry, SearchMatch};
 
 #[derive(Debug)]
+pub enum WorkerCommand {
+    Scan { root: PathBuf },
+    QueryChanged { query: String },
+    Shutdown,
+}
+
+#[derive(Debug)]
+pub enum WorkerEvent {
+    ScanStarted,
+    ScanProgress { completed: usize },
+    ScanCompleted {
+        files: Vec<FileEntry>,
+        oversized_files: usize,
+        unreadable_entries: usize,
+    },
+    ScanError(String),
+    SearchStarted { query: String },
+    SearchProgress { completed: usize, total: usize },
+    SearchCompleted {
+        query: String,
+        results: Vec<SearchMatch>,
+    },
+    SearchCancelled { query: String },
+    SearchError { query: String, error: String },
+}
+
+#[derive(Debug)]
 pub enum AppMsg {
-    // Folder selection
     SelectFolder,
     FolderSelected(PathBuf),
     FolderSelectionCancelled,
-
-    // Scanning
     ScanStarted,
-    ScanCompleted(Vec<FileEntry>),
+    ScanProgress(usize),
+    ScanCompleted {
+        files: Vec<FileEntry>,
+        oversized_files: usize,
+        unreadable_entries: usize,
+    },
     ScanError(String),
-
-    // Search
     SearchQueryChanged(String),
-    SearchDebounced(String),
-    SearchStarted,
+    SearchStarted(String),
     SearchProgress(usize, usize),
     SearchCompleted(Vec<SearchMatch>),
+    SearchCancelled,
     SearchError(String),
-
-    // Pagination
     LoadMoreResults,
-
-    // UI
     OpenFile(PathBuf),
     ClearError,
 }

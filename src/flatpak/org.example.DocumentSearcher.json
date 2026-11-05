@@ -3,26 +3,18 @@
   "runtime": "org.freedesktop.Platform",
   "runtime-version": "23.08",
   "sdk": "org.freedesktop.Sdk",
-  "sdk-extensions": [
-    "org.freedesktop.Sdk.Extension.rust-stable"
-  ],
+  "sdk-extensions": ["org.freedesktop.Sdk.Extension.rust-stable"],
   "command": "document-searcher",
   "finish-args": [
     "--share=ipc",
     "--socket=wayland",
     "--socket=fallback-x11",
     "--device=dri",
+    "--filesystem=home:ro",
     "--talk-name=org.freedesktop.portal.Desktop",
-    "--talk-name=org.freedesktop.portal.FileChooser",
     "--env=TESSDATA_PREFIX=/app/share/tessdata/"
   ],
-  "cleanup": [
-    "/include",
-    "/lib/pkgconfig",
-    "/share/man",
-    "*.a",
-    "*.la"
-  ],
+  "cleanup": ["/include", "/lib/pkgconfig", "/share/man", "*.a", "*.la"],
   "modules": [
     {
       "name": "leptonica",
@@ -40,9 +32,7 @@
       "buildsystem": "autotools",
       "config-opts": ["--disable-graphics"],
       "build-options": {
-        "env": {
-          "LIBLEPT_HEADERSDIR": "/app/include/leptonica"
-        }
+        "env": {"LIBLEPT_HEADERSDIR": "/app/include/leptonica"}
       },
       "sources": [
         {
@@ -50,12 +40,7 @@
           "url": "https://github.com/tesseract-ocr/tesseract/archive/refs/tags/5.3.3.tar.gz",
           "sha256": "dc7fce723a1a36412eec80f55cf552a8a1ffba511c75c88b64e525a74e190399"
         },
-        {
-          "type": "shell",
-          "commands": [
-            "./autogen.sh"
-          ]
-        }
+        {"type": "shell", "commands": ["./autogen.sh"]}
       ]
     },
     {
@@ -77,20 +62,19 @@
       "name": "document-searcher",
       "buildsystem": "simple",
       "build-commands": [
-        "export CARGO_HOME=/app/.cargo",
-        "export RUSTUP_HOME=/app/.rustup",
         ". /usr/lib/sdk/rust-stable/enable",
-        "cargo build --release --offline --target-dir=target",
-        "install -Dm755 target/release/document-searcher /app/bin/document-searcher"
+        "cargo build --release --offline --target-dir=target --no-default-features --features desktop",
+        "install -Dm755 target/release/document-searcher /app/bin/document-searcher",
+        "install -Dm644 data/org.example.DocumentSearcher.desktop /app/share/applications/org.gtk.DocumentSearcher.desktop",
+        "install -Dm644 data/org.example.DocumentSearcher.metainfo.xml /app/share/metainfo/org.gtk.DocumentSearcher.metainfo.xml"
       ],
       "sources": [
-        {
-          "type": "dir",
-          "path": "../"
-        }
+        {"type": "dir", "path": "../"},
+        {"type": "file", "path": "flatpak/generated-sources.json"}
       ],
       "build-options": {
         "env": {
+          "CARGO_HOME": "/run/build/document-searcher/cargo",
           "CARGO_NET_OFFLINE": "true",
           "RUSTFLAGS": "-C link-arg=-Wl,-rpath,/app/lib"
         }

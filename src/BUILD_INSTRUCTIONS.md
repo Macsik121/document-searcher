@@ -49,7 +49,7 @@ sudo dnf install -y tesseract-langpack-eng tesseract-langpack-rus
 ### 1. Clone/Navigate to Project
 
 ```bash
-cd document_searcher
+cd document-searcher/src
 ```
 
 ### 2. Build Blueprint Resources
@@ -59,7 +59,7 @@ cd document_searcher
 blueprint-compiler compile --output data/resources/window.ui data/resources/window.blp
 
 # Compile GResource
-glib-compile-resources --target data/resources/org.example.DocumentSearcher.gresource \
+glib-compile-resources --target data/resources/org.gtk.DocumentSearcher.gresource \
     --sourcedir data/resources \
     data/resources/gresource.xml
 ```
@@ -76,7 +76,7 @@ cargo build --release
 # Run
 cargo run
 # OR
-./target/release/document_searcher
+./target/release/document-searcher
 ```
 
 ---
@@ -89,7 +89,7 @@ cargo run
 # From project root
 cargo generate-lockfile
 cargo install cargo-flatpak-generator
-cargo flatpak-generator Cargo.lock -o flatpak/generated-sources.json
+cargo flatpak-generator --output flatpak/generated-sources.json
 ```
 
 ### 2. Build Flatpak
@@ -107,14 +107,14 @@ flatpak-builder --force-clean --install-deps-from=flathub --user \
 ### 3. Run Flatpak
 
 ```bash
-flatpak run org.example.DocumentSearcher
+flatpak run org.gtk.DocumentSearcher
 ```
 
 ### 4. Create Flatpak Bundle (for distribution)
 
 ```bash
 flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
-    flatpak/build-dir document_searcher.flatpak org.example.DocumentSearcher
+    flatpak/build-dir document-searcher.flatpak org.gtk.DocumentSearcher
 ```
 
 ---
@@ -164,7 +164,7 @@ blueprint-compiler --version
 
 ```bash
 # Check file exists
-ls -la data/resources/org.example.DocumentSearcher.gresource
+ls -la data/resources/org.gtk.DocumentSearcher.gresource
 
 # Re-run build.rs manually
 cargo build  # This runs build.rs automatically
@@ -200,7 +200,7 @@ flatpak-builder --force-clean ...
 ## Project Structure Reference
 
 ```
-document_searcher/
+document-searcher/
 ├── Cargo.toml
 ├── Cargo.lock
 ├── rust-toolchain.toml
@@ -211,11 +211,11 @@ document_searcher/
 │   │   ├── window.ui (generated)
 │   │   ├── gresource.xml
 │   │   ├── styles.css
-│   │   └── org.example.DocumentSearcher.gresource (generated)
-│   ├── org.example.DocumentSearcher.desktop
-│   └── org.example.DocumentSearcher.metainfo.xml
+│   │   └── org.gtk.DocumentSearcher.gresource (generated)
+│   ├── org.gtk.DocumentSearcher.desktop
+│   └── org.gtk.DocumentSearcher.metainfo.xml
 ├── flatpak/
-│   ├── org.example.DocumentSearcher.json
+│   ├── org.gtk.DocumentSearcher.json
 │   └── generated-sources.json
 └── src/
     ├── main.rs

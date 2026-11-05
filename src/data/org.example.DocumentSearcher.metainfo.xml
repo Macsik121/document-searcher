@@ -1,37 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>org.example.DocumentSearcher</id>
+  <id>org.gtk.DocumentSearcher</id>
   <name>Document Searcher</name>
   <summary>Search through documents in a folder</summary>
   <description>
-    <p>Document Searcher is a powerful desktop application for searching through documents in a specified folder and all its subfolders.</p>
-    <p>Features:</p>
-    <ul>
-      <li>Recursive file scanning with support for multiple document formats</li>
-      <li>Full-text search with OCR support for images and scanned documents</li>
-      <li>Context preview showing 20 characters before and after each match</li>
-      <li>Clickable results that open files in the default application</li>
-      <li>Flatpak sandboxed for security</li>
-    </ul>
-    <p>Supported formats: TXT, DOCX, PDF, Markdown, RTF, ODT</p>
+    <p>Document Searcher recursively searches supported documents in a selected folder.</p>
+    <p>It provides Unicode-aware full-text search, context previews, native text extraction, and OCR for image files and scanned PDFs when the OCR runtime is installed.</p>
+    <p>Supported formats: TXT, Markdown, Rust, TOML, JSON, XML, HTML, CSS, JavaScript, TypeScript, PDF, DOCX, PNG, JPEG, TIFF, and BMP.</p>
   </description>
   <project_license>MIT</project_license>
-  <developer_name>Example Developer</developer_name>
-  <url type="homepage">https://github.com/example/document_searcher</url>
-  <url type="bugtracker">https://github.com/example/document_searcher/issues</url>
+  <developer_name>Document Searcher contributors</developer_name>
   <provides>
-    <binary>document_searcher</binary>
+    <binary>document-searcher</binary>
   </provides>
-  <screenshots>
-    <screenshot type="default">
-      <image>https://github.com/example/document_searcher/raw/main/screenshot.png</image>
-    </screenshot>
-  </screenshots>
-  <releases>
-    <release version="0.1.0" date="2026-08-31">
-      <description>Initial release</description>
-    </release>
-  </releases>
   <categories>
     <category>Utility</category>
     <category>Office</category>
@@ -43,20 +24,9 @@
     <keyword>text</keyword>
     <keyword>ocr</keyword>
   </keywords>
-  <content_rating type="oars-1.1">
-    <content_attribute id="violence-cartoon">none</content_attribute>
-    <content_attribute id="violence-fantasy">none</content_attribute>
-    <content_attribute id="violence-realistic">none</content_attribute>
-    <content_attribute id="violence-bloodshed">none</content_attribute>
-    <content_attribute id="sexual-content">none</content_attribute>
-    <content_attribute id="sexual-violence">none</content_attribute>
-    <content_attribute id="drugs-alcohol">none</content_attribute>
-    <content_attribute id="drugs-tobacco">none</content_attribute>
-    <content_attribute id="gambling">none</content_attribute>
-    <content_attribute id="profanity">none</content_attribute>
-  </content_rating>
-  <custom>
-    <value key="flatpak-install">flatpak install flathub org.example.DocumentSearcher</value>
-    <value key="flatpak-run">flatpak run org.example.DocumentSearcher</value>
-  </custom>
+  <releases>
+    <release version="0.1.0" date="2026-11-05">
+      <description>Initial development release</description>
+    </release>
+  </releases>
 </component>

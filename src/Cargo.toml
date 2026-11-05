@@ -3,28 +3,45 @@ name = "document-searcher"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+ocr = ["dep:leptess"]
+desktop = [
+    "ocr",
+    "dep:libadwaita",
+    "dep:gtk",
+    "dep:gio",
+    "dep:relm4",
+    "dep:ashpd",
+]
+
 [dependencies]
-# UI Framework
-relm4 = { version = "0.7", features = ["libadwaita", "gtk4-0-8"] }
-libadwaita = { version = "0.5", features = ["v1_4"] }
-gtk = { version = "0.7", features = ["v4_10"] }
-gio = { version = "0.7" }
+# UI and desktop integration are optional so the search core can be tested on Windows.
+libadwaita = { version = "0.5", features = ["v1_4"], optional = true }
+gtk = { package = "gtk4", version = "0.7", features = ["v4_10"], optional = true }
+gio = { version = "0.18", optional = true }
+relm4 = { version = "0.7", features = ["libadwaita"], optional = true }
+ashpd = { version = "0.8", optional = true }
+leptess = { version = "0.14", optional = true }
 
-# Concurrency & Channels
-tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "fs", "sync", "time"] }
-tokio-util = "0.7" # For CancellationToken
+# Background processing
 async-channel = "2.3"
+tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "fs", "sync", "time"] }
+tokio-util = "0.7"
 
-# Text & File Parsing
-docx-rs = "0.5"
-lopdf = "0.34"
-pdf-extract = "0.7"
-leptess = "0.4"
-walkdir = "2.4"
-mime_guess = "2.0"
-unicode-segmentation = "1.10"
-
-# Utils
+# Document processing
 anyhow = "1.0"
+pdf-extract = "0.7"
+quick-xml = "0.31"
+walkdir = "2.4"
+zip = "0.6"
+
+# Diagnostics
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"

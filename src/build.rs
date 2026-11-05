@@ -1,42 +1,56 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Command;
 
+fn run_tool(program: &str, args: &[&str]) {
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .unwrap_or_else(|error| panic!("failed to run {program}: {error}"));
+
+    if !status.success() {
+        panic!("{program} failed with status {status}");
+    }
+}
+
 fn main() {
-    // Tell cargo to rerun if these files change
     println!("cargo:rerun-if-changed=data/resources/window.blp");
     println!("cargo:rerun-if-changed=data/resources/gresource.xml");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_DESKTOP");
 
-    // Compile Blueprint to XML
-    let blueprint_input = PathBuf::from("data/resources/window.blp");
-    let blueprint_output = PathBuf::from("data/resources/window.ui");
-
-    let status = Command::new("blueprint-compiler")
-        .args(["compile", "--output", blueprint_output.to_str().unwrap(), blueprint_input.to_str().unwrap()])
-        .status()
-        .expect("Failed to run blueprint-compiler. Is it installed?");
-
-    if !status.success() {
-        panic!("blueprint-compiler failed with status: {}", status);
+    // The core/CLI build deliberately has no GTK toolchain requirement. This keeps
+    // Windows development useful while the desktop build is assembled on Linux.
+    if env::var_os("CARGO_FEATURE_DESKTOP").is_none() {
+        return;
     }
 
-    // Compile GResource
-    let gresource_xml = PathBuf::from("data/resources/gresource.xml");
-    let gresource_output = PathBuf::from("data/resources/org.example.DocumentSearcher.gresource");
-
-    let status = Command::new("glib-compile-resources")
-        .args([
-            "--target", gresource_output.to_str().unwrap(),
-            "--sourcedir", "data/resources",
-            gresource_xml.to_str().unwrap(),
-        ])
-        .status()
-        .expect("Failed to run glib-compile-resources. Is it installed?");
-
-    if !status.success() {
-        panic!("glib-compile-resources failed with status: {}", status);
+    if !cfg!(target_os = "linux") {
+        println!("cargo:warning=desktop resources are only built on Linux");
+        return;
     }
 
-    // Generate Rust code for GResource
-    gresource::generate(&gresource_xml, "data/resources", None).expect("Failed to generate GResource Rust code");
+    let blueprint_input = Path::new("data/resources/window.blp");
+    let blueprint_output = Path::new("data/resources/window.ui");
+    run_tool(
+        "blueprint-compiler",
+        &[
+            "compile",
+            "--output",
+            blueprint_output.to_str().expect("non-UTF-8 output path"),
+            blueprint_input.to_str().expect("non-UTF-8 input path"),
+        ],
+    );
+
+    let gresource_xml = Path::new("data/resources/gresource.xml");
+    let gresource_output = Path::new("data/resources/org.gtk.DocumentSearcher.gresource");
+    run_tool(
+        "glib-compile-resources",
+        &[
+            "--target",
+            gresource_output.to_str().expect("non-UTF-8 output path"),
+            "--sourcedir",
+            "data/resources",
+            gresource_xml.to_str().expect("non-UTF-8 resource path"),
+        ],
+    );
 }

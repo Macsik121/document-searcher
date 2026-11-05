@@ -1,24 +1,49 @@
-# Document searcher
+# Document Searcher
 
-The Document Searcher App for Alt Linux with graphical interface designed to solve my mother's industrial case.
+Desktop application for searching documents on ALT Linux. The project is being developed in stages: the document-search core and a small CLI can be exercised on Windows, while the GTK/Libadwaita interface, portals, OCR and Flatpak packaging require Linux (ultimately the ALT Linux VM).
 
-### Validation Step (Your Next Steps)
+## Core development on Windows
 
-(all of the necessary files are edited)
+Install Rust stable (the repository pins Rust 1.78.0 in `src/rust-toolchain.toml`). Open a new PowerShell after installation so Cargo is on `PATH`. If it is not, use the temporary PATH setup shown below.
 
-You now have the structural perimeter of the application built. Run the following commands in your terminal to validate the sandbox:
+Run commands from the repository root with `--manifest-path`, or change directory to `src/` first:
 
-1. `cargo generate-lockfile` (This ensures you have a `Cargo.lock` which is required for flatpak Rust builds).
+```powershell
+$env:Path = "$env:USERPROFILE\.cargo\bin;" + $env:Path
+Set-Location .\src
+cargo fmt --check
+cargo test --lib --no-default-features
+cargo clippy --lib --tests --no-default-features -- -D warnings
+cargo run --no-default-features -- scan <directory>
+cargo run --no-default-features -- search <directory> <query>
+```
 
-2. `cargo install cargo-flatpak-generator` (If you haven't already).
+Equivalent commands from the repository root:
 
-3. `cargo flatpak-generator --output flatpak/generated-sources.json` (This parses your `Cargo.lock` and creates a list of crates for Flatpak to download offline).
+```powershell
+cargo test --manifest-path .\src\Cargo.toml --lib --no-default-features
+cargo run --manifest-path .\src\Cargo.toml --no-default-features -- scan <directory>
+cargo run --manifest-path .\src\Cargo.toml --no-default-features -- search <directory> <query>
+```
 
-4. **Link the generated sources:** Add `{ "type": "file", "path": "generated-sources.json" }` into the `sources` array of the `document-searcher` module in your JSON manifest.
+The default build excludes GTK and OCR native dependencies. It checks scanning, UTF-8 text/DOCX/PDF text-layer extraction, and Unicode-aware searching. Image OCR and scanned-PDF OCR require the `ocr` feature, Tesseract/Leptonica, language data, and `pdftoppm`; those should be validated in Linux. The GTK application is not currently a Windows target because GTK/Libadwaita/portal dependencies are Linux desktop dependencies.
 
-5. **Build the container:** `flatpak-builder --force-clean --user build-dir flatpak/org.gtk.DocumentSearcher.json`
+## Linux / ALT Linux validation
 
+From `src/`, validate the core first:
 
+```sh
+cargo fmt --check
+cargo test --lib
+cargo clippy --lib --tests -- -D warnings
+```
 
-Once that successfully compiles, the C-dependencies are locked in. We can then confidently write the **Tokio Worker & Debouncer** (the backend logic) knowing the OCR extraction calls will safely compile.
+The GUI build additionally requires GTK4, Libadwaita, Blueprint Compiler, GLib development tools, and the portal. Flatpak build instructions are in [`src/BUILD_INSTRUCTIONS.md`](src/BUILD_INSTRUCTIONS.md); the manifest and desktop application still need final integration and end-to-end verification.
 
+## Specifications
+
+See [`docs/specs/`](docs/specs/) for the subject-area analysis, requirements, and system design.
+
+## Current development status
+
+The core scanner, extractors, Unicode-aware matcher, Tokio worker, and Windows-friendly CLI are under active development. The GTK/Relm4 application, portal-based folder selection, GSettings persistence, and Flatpak packaging remain unfinished; do not treat the current CLI as the final desktop application.

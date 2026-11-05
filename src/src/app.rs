@@ -368,10 +368,10 @@ impl AppModel {
 
 pub fn run() {
     // Register GResource
-    let res = gio::Resource::load("data/resources/org.example.DocumentSearcher.gresource")
+    let res = gio::Resource::load("data/resources/org.gtk.DocumentSearcher.gresource")
         .expect("Failed to load GResource");
     gio::resources_register(&res);
 
-    let app = RelmApp::new("org.example.DocumentSearcher");
+    let app = RelmApp::new("org.gtk.DocumentSearcher");
     app.run::<AppModel>(());
 }
