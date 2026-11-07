@@ -1,257 +1,114 @@
-# Document Searcher - Build & Test Instructions
+# Document Searcher build and test instructions
 
-## Prerequisites (on Alt Linux / WSL / Linux VM)
+## Windows: core only
 
-### System Dependencies
+Windows checks must use `--no-default-features`; do not enable `desktop` or
+`ocr` on Windows. From the repository root:
 
-```bash
-# On Alt Linux (or Fedora/RHEL-based):
-sudo dnf install -y \
-    gcc gcc-c++ make cmake \
-    gtk4-devel libadwaita-devel \
-    blueprint-compiler glib2-devel \
-    tesseract-devel leptonica-devel \
-    openssl-devel pkgconfig \
-    flatpak flatpak-builder \
-    cargo rustup
-
-# On Ubuntu/Debian:
-sudo apt install -y \
-    build-essential cmake \
-    libgtk-4-dev libadwaita-1-dev \
-    blueprint-compiler libglib2.0-dev \
-    libtesseract-dev libleptonica-dev \
-    libssl-dev pkg-config \
-    flatpak flatpak-builder \
-    cargo rustup
+```powershell
+cargo fmt --check --manifest-path .\src\Cargo.toml
+cargo test --manifest-path .\src\Cargo.toml --lib --no-default-features
+cargo clippy --manifest-path .\src\Cargo.toml --lib --tests --no-default-features -- -D warnings
+cargo run --manifest-path .\src\Cargo.toml --no-default-features -- scan <directory>
+cargo run --manifest-path .\src\Cargo.toml --no-default-features -- search <directory> <query>
 ```
 
-### Rust Toolchain
+These checks cover the feature-free CLI and core only. They do not validate
+GTK/Libadwaita, portal behavior, GSettings runtime, OCR, or Flatpak. If Windows
+policy blocks Cargo build scripts, record the exact error and rerun the checks
+in the ALT Linux VM rather than marking them passed.
 
-```bash
-rustup install 1.78.0
-rustup default 1.78.0
-rustup component add rustfmt clippy
+## Linux native prerequisites
+
+The desktop build needs a Linux environment with Rust, a C toolchain,
+`pkg-config`, GTK4/Libadwaita development packages, GLib tools including
+`glib-compile-resources` and `glib-compile-schemas`, Tesseract/Leptonica,
+`pdftoppm`, and a desktop portal runtime. Package names vary between ALT Linux
+releases; use the package names available in the target VM.
+
+Blueprint Compiler is not required. The runnable UI is constructed
+procedurally in `src/src/app.rs`. On a Linux desktop build, `build.rs`
+automatically compiles `data/resources/gresource.xml` and the GSettings schema.
+The compiled CSS resource is embedded into the application binary at build
+time; the runtime does not load it from Cargo's `OUT_DIR` and Flatpak does not
+install a separate `.gresource` file.
+
+From `src/` in the ALT Linux VM:
+
+```sh
+cargo fmt --check
+cargo test --lib --no-default-features
+cargo clippy --lib --tests --no-default-features -- -D warnings
+cargo build --release --features desktop
+cargo run --release --features desktop
 ```
 
-### Tesseract Language Data
+The schema is compiled into the build output for development. For installed
+packages it is installed under `/app/share/glib-2.0/schemas` and compiled by
+the Flatpak manifest. Check schema discovery, embedded CSS lookup, portal
+folder selection/cancellation, scan/search, pagination, GIO file opening, and
+OCR separately in the Linux environment.
 
-```bash
-# Install language data for OCR
-sudo dnf install -y tesseract-langpack-eng tesseract-langpack-rus
-# OR manually download to /usr/share/tessdata/
-```
+## Flatpak build (ALT Linux VM only)
 
----
+The single current manifest is
+`flatpak/org.gtk.DocumentSearcher.json`. After dependency versions and
+`Cargo.lock` are stable, generate offline Cargo sources in the Linux VM:
 
-## Building Natively (Development)
-
-### 1. Clone/Navigate to Project
-
-```bash
-cd document-searcher/src
-```
-
-### 2. Build Blueprint Resources
-
-```bash
-# Compile .blp to .ui
-blueprint-compiler compile --output data/resources/window.ui data/resources/window.blp
-
-# Compile GResource
-glib-compile-resources --target data/resources/org.gtk.DocumentSearcher.gresource \
-    --sourcedir data/resources \
-    data/resources/gresource.xml
-```
-
-### 3. Build with Cargo
-
-```bash
-# Debug build
-cargo build
-
-# Release build
-cargo build --release
-
-# Run
-cargo run
-# OR
-./target/release/document-searcher
-```
-
----
-
-## Building Flatpak (Production)
-
-### 1. Generate Cargo Sources for Offline Build
-
-```bash
-# From project root
-cargo generate-lockfile
-cargo install cargo-flatpak-generator
+```sh
+cd src
 cargo flatpak-generator --output flatpak/generated-sources.json
-```
-
-### 2. Build Flatpak
-
-```bash
-# Clean build
 flatpak-builder --force-clean --install-deps-from=flathub \
-    flatpak/build-dir flatpak/org.example.DocumentSearcher.json
-
-# Install locally
-flatpak-builder --force-clean --install-deps-from=flathub --user \
-    --install flatpak/build-dir flatpak/org.example.DocumentSearcher.json
-```
-
-### 3. Run Flatpak
-
-```bash
+  flatpak/build-dir flatpak/org.gtk.DocumentSearcher.json
+flatpak-builder --force-clean --user --install \
+  flatpak/build-dir flatpak/org.gtk.DocumentSearcher.json
 flatpak run org.gtk.DocumentSearcher
 ```
 
-### 4. Create Flatpak Bundle (for distribution)
+Do not hand-create `generated-sources.json` on Windows or report the Flatpak as
+verified until `flatpak-builder` and `flatpak run` have completed in the VM.
+The manifest installs the desktop entry, AppStream metadata, and schema; CSS
+is embedded in the binary. The manifest currently supplies English tessdata
+and sets `DOCUMENT_SEARCHER_OCR_LANG=eng`, while the extractor fallback is
+`eng+rus`; resolve that mismatch only after a Linux OCR check.
 
-```bash
-flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
-    flatpak/build-dir document-searcher.flatpak org.gtk.DocumentSearcher
+## Linux smoke checklist
+
+- Launch the native desktop app and Flatpak app.
+- Confirm CSS loads from the embedded GResource.
+- Confirm default path `/home/documents`, then select and persist another path.
+- Confirm folder chooser cancellation preserves the prior selection.
+- Scan and search a folder, exercise cancellation and pagination, and open a
+  result through GIO/portal integration.
+- Verify image and scanned-PDF OCR against the installed tessdata.
+- Confirm schema lookup and Flatpak filesystem/portal permissions.
+
+## Current source layout
+
+```text
+src/
+  Cargo.toml
+  Cargo.lock
+  build.rs
+  data/
+    org.gtk.DocumentSearcher.desktop
+    org.gtk.DocumentSearcher.gschema.xml
+    org.gtk.DocumentSearcher.metainfo.xml
+    resources/
+      gresource.xml
+      styles.css
+  flatpak/
+    org.gtk.DocumentSearcher.json
+    generated-sources.json  # generated in the Linux VM
+  src/
+    main.rs
+    app.rs
+    lib.rs
+    model/
+      actions.rs
+      extractor.rs
+      scanner.rs
+      search.rs
+      state.rs
+      worker.rs
 ```
-
----
-
-## Testing Checklist
-
-### Functional Tests
-
-| Test | Expected Result |
-|------|-----------------|
-| Launch app | Window opens with "Document Searcher" title |
-| Default folder | Shows "Folder: /home/documents" |
-| Change Folder button | Opens portal file chooser |
-| Select folder | Updates folder label, scans files |
-| File count label | Shows "N files found" |
-| File list | Shows relative paths (e.g., `presentations/day_of_opened_doors.pdf`) |
-| Search input | Placeholder: "Enter the search string..." |
-| Type in search | After 300ms debounce, spinner appears |
-| Search completes | Green "Search complete" indicator |
-| Results list | Numbered items with bold file names |
-| Click file link | Opens in nautilus/file manager |
-| Show more button | Loads 100 more results, reappears |
-| Context preview | Shows `...20 before + match + 20 after...` |
-
-### Edge Cases
-
-- Empty folder → shows "0 files found"
-- No matches → empty results list
-- Very large files → doesn't crash (streaming read)
-- Special characters in filenames → handled correctly
-- Cancel folder selection → keeps previous folder
-- Rapid typing → only searches after 300ms pause
-
----
-
-## Troubleshooting
-
-### Blueprint Compilation Fails
-
-```bash
-# Ensure blueprint-compiler is installed
-blueprint-compiler --version
-# Should be 0.9.x
-```
-
-### GResource Not Found
-
-```bash
-# Check file exists
-ls -la data/resources/org.gtk.DocumentSearcher.gresource
-
-# Re-run build.rs manually
-cargo build  # This runs build.rs automatically
-```
-
-### Tesseract Not Found
-
-```bash
-# Verify installation
-tesseract --version
-# Check tessdata
-ls /usr/share/tessdata/eng.traineddata
-```
-
-### Flatpak Build Fails
-
-```bash
-# Check generated-sources.json exists
-ls -la flatpak/generated-sources.json
-
-# Clean and rebuild
-rm -rf flatpak/build-dir
-flatpak-builder --force-clean ...
-```
-
-### Portal Errors (File Chooser)
-
-- Ensure `xdg-desktop-portal-gtk` is installed
-- Run with `--filesystem=host` temporarily for debugging (remove for production)
-
----
-
-## Project Structure Reference
-
-```
-document-searcher/
-├── Cargo.toml
-├── Cargo.lock
-├── rust-toolchain.toml
-├── build.rs
-├── data/
-│   ├── resources/
-│   │   ├── window.blp
-│   │   ├── window.ui (generated)
-│   │   ├── gresource.xml
-│   │   ├── styles.css
-│   │   └── org.gtk.DocumentSearcher.gresource (generated)
-│   ├── org.gtk.DocumentSearcher.desktop
-│   └── org.gtk.DocumentSearcher.metainfo.xml
-├── flatpak/
-│   ├── org.gtk.DocumentSearcher.json
-│   └── generated-sources.json
-└── src/
-    ├── main.rs
-    ├── app.rs
-    ├── utils.rs
-    ├── model/
-    │   ├── mod.rs
-    │   ├── state.rs
-    │   ├── actions.rs
-    │   ├── scanner.rs
-    │   ├── extractor.rs
-    │   └── search.rs
-    └── widgets/
-        ├── mod.rs
-        ├── sidebar.rs
-        ├── search_bar.rs
-        └── results_list.rs
-```
-
----
-
-## Development Workflow
-
-1. **Edit UI**: Modify `data/resources/window.blp`
-2. **Rebuild resources**: Run `cargo build` (build.rs handles this)
-3. **Edit logic**: Modify files in `src/model/` and `src/widgets/`
-4. **Test**: `cargo run`
-5. **Format**: `cargo fmt`
-6. **Lint**: `cargo clippy`
-
----
-
-## ALT Linux Specific Notes
-
-- Use `org.freedesktop.Platform//23.08` runtime (ALT's current LTS)
-- Ensure `.desktop` file has correct `Categories=Utility;TextTools;Office;`
-- MIME types in `.desktop` match supported extensions
-- AppStream metadata includes Russian localization if needed
-- SELinux: Flatpak sandbox handles this automatically

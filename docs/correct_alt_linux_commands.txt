@@ -89,7 +89,7 @@ flatpak install flathub org.freedesktop.Sdk//23.08 org.freedesktop.Platform//23.
 
 # 4. Build using flatpak-builder (uses SDK, not host libs)
 cd document_searcher
-flatpak-builder --force-clean --install-deps-from=flathub   flatpak/build-dir flatpak/org.example.DocumentSearcher.json
+flatpak-builder --force-clean --install-deps-from=flathub   flatpak/build-dir flatpak/org.gtk.DocumentSearcher.json
 ```
 
 This is **the most reliable path on Alt Linux** — the Flatpak SDK provides all correct GTK4/libadwaita/tesseract versions regardless of host distro.
@@ -99,9 +99,9 @@ This is **the most reliable path on Alt Linux** — the Flatpak SDK provides all
 ## Quick test: Can you run the flatpak build now?
 
 ```bash
-cd document_searcher
-ls flatpak/org.example.DocumentSearcher.json  # verify manifest exists
-flatpak-builder --force-clean --install-deps-from=flathub   flatpak/build-dir flatpak/org.example.DocumentSearcher.json
+cd document-searcher/src
+ls flatpak/org.gtk.DocumentSearcher.json  # verify the sole current manifest
+flatpak-builder --force-clean --install-deps-from=flathub flatpak/build-dir flatpak/org.gtk.DocumentSearcher.json
 ```
 
 If that works, you're done — no system GTK/tesseract packages needed.

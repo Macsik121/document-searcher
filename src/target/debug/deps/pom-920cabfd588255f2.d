@@ -1,0 +1,12 @@
+C:\Users\максим\Documents\programming\projects\document-searcher\src\target\debug\deps\pom-920cabfd588255f2.d: C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\lib.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\input.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\result.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\train.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\range.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\set.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\parser.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\char_class.rs
+
+C:\Users\максим\Documents\programming\projects\document-searcher\src\target\debug\deps\libpom-920cabfd588255f2.rmeta: C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\lib.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\input.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\result.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\train.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\range.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\set.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\parser.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\char_class.rs
+
+C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\lib.rs:
+C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\input.rs:
+C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\result.rs:
+C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\train.rs:
+C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\range.rs:
+C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\set.rs:
+C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\parser.rs:
+C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pom-1.1.0\src\char_class.rs:

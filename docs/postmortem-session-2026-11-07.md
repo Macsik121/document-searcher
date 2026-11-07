@@ -1,108 +1,44 @@
-# Document Searcher — Postmortem сессии 2026-11-07
+# Document Searcher — postmortem сессии 2026-11-07
 
-## 1. Контекст и цели
+## Продолжение работ 2026-11-08
 
-Продолжение разработки проекта Document Searcher. Цель сессии — выполнить подготовительные изменения по плану `~/.claude/plans/whimsical-leaping-lemon.md`: унифицировать metadata, исправить RuntimeBridge shutdown, убрать неиспользуемый код, подготовить репозиторий к переносу в ALT Linux VM.
+### Что сделано в предыдущей сессии
 
-## 2. Выполненные изменения
+- Application ID приведён к `org.gtk.DocumentSearcher`; старые desktop/metainfo/Flatpak имена удалены, создан единственный актуальный manifest `src/flatpak/org.gtk.DocumentSearcher.json`.
+- `RuntimeBridge` завершает worker через `Drop`: отправка `Shutdown` и join runtime thread выполняются в отдельном потоке.
+- Blueprint-компиляция удалена из `build.rs`; ресурсный XML содержит только `styles.css`, а schema собирается GLib tooling на Linux.
+- Пользовательский diff `docs/specs/requirements-spec.md` необходимо сохранять без изменений.
 
-### 2.1. Metadata унификация
+### Windows core/CLI validation
 
-**Удалены:**
-- `src/data/org.example.DocumentSearcher.desktop`
-- `src/data/org.example.DocumentSearcher.metainfo.xml`
-- `src/flatpak/org.example.DocumentSearcher.json`
+Все команды выполнены на Windows только с `--no-default-features`; desktop/OCR features не запускались:
 
-**Переименованы/созданы:**
-- `src/data/org.gtk.DocumentSearcher.desktop`
-- `src/data/org.gtk.DocumentSearcher.metainfo.xml`
-- `src/flatpak/org.gtk.DocumentSearcher.json` — единственный актуальный manifest
+- `cargo test --manifest-path .\\src\\Cargo.toml --lib --no-default-features` — 18 passed, 0 failed. Включая пять регрессионных search-тестов: case-insensitive, empty query, 20-character context, Unicode offsets и non-overlapping matches.
+- `cargo fmt --check --manifest-path .\\src\\Cargo.toml` — успешно, без вывода.
+- `cargo clippy --manifest-path .\\src\\Cargo.toml --lib --tests --no-default-features -- -D warnings` — успешно, предупреждений нет.
+- CLI smoke `scan` на временном каталоге — найден один `sample.txt`.
+- CLI smoke `search ... needle` на том же каталоге — найден один файл; контекст: `A searchable needle in UTF-8 text.`.
 
-Все ссылки теперь используют `org.gtk.DocumentSearcher` как application ID.
+Результаты подтверждают core/CLI на Windows. Они не подтверждают native GUI, portal, GSettings runtime, OCR или Flatpak.
 
-### 2.2. RuntimeBridge shutdown lifecycle
+### Изменения реализации и документации 2026-11-08
 
-**Файл:** `src/src/app.rs`
+- Runtime GResource теперь читается через `include_bytes!(env!("DOCUMENT_SEARCHER_GRESOURCE"))`, преобразуется через `glib::Bytes::from_static` и `gio::Resource::from_data`, затем регистрируется до запуска UI. Runtime не загружает файл из `OUT_DIR`; отдельный `.gresource` в Flatpak не устанавливается. CSS path `/org/gtk/DocumentSearcher/styles.css` сохранён.
+- Удалены stale `src/src/utils.rs` и `src/data/resources/window.blp`; комментарий в `app.rs` описывает procedural UI.
+- Синхронизированы `README.md`, `src/BUILD_INSTRUCTIONS.md`, `docs/ALT-LINUX-RUN.md` и актуальные deployment notes.
+- Созданы `docs/architecture/README.md`, `component-architecture.md`, `scan-search-sequence.md`, `user-flow.md`, `deployment.md`, `state-and-data-model.md`, `assumptions-gaps.md`.
 
-- Удалён неиспользуемый метод `shutdown()`, который создавал новый канал без receiver
-- Оставлен единственный путь завершения: `Drop` отправляет `WorkerCommand::Shutdown` через `blocking_send` в отдельном OS-потоке, затем вызывает `join()` на runtime thread
-- Это предотвращает блокировку GTK thread при полной очереди команд и даёт worker'у возможность graceful exit
+### Не проверено: требуется ALT Linux VM
 
-### 2.3. Build.rs Blueprint cleanup
+- `cargo build --release --features desktop`, запуск GUI и CSS lookup из embedded resource.
+- Portal folder chooser, доступ к выбранной директории, открытие файлов через GIO/portal.
+- GSettings schema discovery и сохранение/восстановление `scan-path`.
+- Image/scanned-PDF OCR и соответствие manifest language `eng` против extractor default `eng+rus`.
+- Генерация `flatpak/generated-sources.json`, `flatpak-builder`, permissions и `flatpak run org.gtk.DocumentSearcher`.
 
-**Файл:** `src/build.rs`
+## Ограничения и следующий этап
 
-- Удалён `cargo:rerun-if-changed=data/resources/window.blp`
-- Удалён вызов `blueprint-compiler` для `window.blp → window.ui`
-- Оставлена только компиляция `gresource.xml` (содержит только `styles.css`) и GSettings schema
+На Windows разрешены только fmt, core tests, Clippy и CLI smoke с `--no-default-features`. Все desktop, portal, GSettings runtime, OCR и Flatpak результаты необходимо получить отдельно в ALT Linux VM. Коммит не создавался.
 
-### 2.4. GResource текущее состояние
-
-- GResource компилируется в `$OUT_DIR/org.gtk.DocumentSearcher.gresource`
-- Runtime загружает ресурс по пути из `env!("DOCUMENT_SEARCHER_GRESOURCE")`
-- **Проблема:** путь `OUT_DIR` недоступен после упаковки Flatpak
-- **Решение в плане:** встроить ресурс в бинарник через compile-time bytes или установить в `/app/share/...`
-
-## 3. Текущее состояние git
-
-```
-M docs/specs/requirements-spec.md      — пользовательские изменения, сохранить
-M src/Cargo.toml
-M src/build.rs
-M src/data/resources/gresource.xml
-M src/src/app.rs
-M src/src/main.rs
-M src/src/widgets/mod.rs
-D src/data/org.example.DocumentSearcher.desktop
-D src/data/org.example.DocumentSearcher.metainfo.xml
-D src/flatpak/org.example.DocumentSearcher.json
-?? docs/postmortem-session-2026-11-07.md
-?? src/data/org.gtk.DocumentSearcher.desktop
-?? src/data/org.gtk.DocumentSearcher.gschema.xml
-?? src/data/org.gtk.DocumentSearcher.metainfo.xml
-?? src/flatpak/org.gtk.DocumentSearcher.json
-```
-
-## 4. Оставшиеся задачи по плану
-
-### 4.1. Требуют Linux (ALT Linux VM)
-
-- [ ] Проверить `cargo build --features desktop`
-- [ ] GUI smoke tests: запуск, folder chooser, GSettings persistence, scan, search, pagination
-- [ ] Сгенерировать `flatpak/generated-sources.json`
-- [ ] Flatpak build и `flatpak run org.gtk.DocumentSearcher`
-- [ ] Проверить что schema находится через `gio::Settings` в Flatpak
-- [ ] Проверить portal permissions
-
-### 4.2. Можно сделать на Windows
-
-- [ ] Удалить неиспользуемый `src/src/utils.rs` (не подключён в `lib.rs`, содержит stale portal helpers)
-- [ ] Удалить `src/data/resources/window.blp` (не используется, UI процедурный)
-- [ ] Реализовать install-safe GResource: embedded bytes или `/app/share` путь
-- [ ] Обновить `README.md` и `src/BUILD_INSTRUCTIONS.md`
-- [ ] Создать `docs/architecture/` с Mermaid-диаграммами
-- [ ] Выполнить `cargo fmt --check`, core tests, clippy
-
-## 5. Известные проблемы
-
-1. **GResource install-time risk:** Runtime загружает ресурс из `OUT_DIR`, который не существует в установленном Flatpak. Нужно встроить ресурс или установить в стабильный путь.
-
-2. **GSettings dev fallback:** `load_settings()` использует только default schema source. В native dev-запуске schema может не найтись без явного указания `GSETTINGS_SCHEMA_DIR`. Flatpak manifest устанавливает schema корректно.
-
-3. **OCR language mismatch:** Extractor default `eng+rus`, Flatpak поставляет только `eng`. Manifest задаёт `DOCUMENT_SEARCHER_OCR_LANG=eng`.
-
-## 6. Архитектура (для справки)
-
-- **Entry points:** CLI (no feature) / GTK desktop (`desktop` feature)
-- **UI:** Процедурный GTK4/Libadwaita, не Relm4
-- **Worker:** Отдельный Tokio runtime thread, сообщение через `mpsc` channels
-- **Contracts:** `WorkerCommand`/`WorkerEvent` в `model/actions.rs`
-- **State:** `AppState` в `model/state.rs`, мутации только в GLib main loop
-
-## 7. Следующий шаг
-
-Продолжить по плану с этапа 3 (install-safe GResource), затем архитектурная документация и Windows-проверки. Перенос в ALT Linux VM — после коммита подготовленных изменений.
-
----
-
-**План:** `~/.claude/plans/whimsical-leaping-lemon.md`
+**Планы:** `~/.claude/plans/document-searcher-piped-cat.md` и
+`~/.claude/plans/document-searcher-sharded-otter.md`.

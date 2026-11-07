@@ -124,7 +124,7 @@ Desktop-часть пока нельзя считать готовым прил�
 
 ## 7. Что осталось до Flatpak-релиза
 
-- унифицировать физические имена desktop/metainfo/manifest файлов с app id `org.gtk.DocumentSearcher` либо последовательно оставить имена файлов `org.example...` только как внутренние пути без расхождений в содержимом;
+- унифицировать физические имена desktop/metainfo/manifest файлов с app id `org.gtk.DocumentSearcher` либо последовательно оставить имена файлов `org.gtk.DocumentSearcher` только как внутренние пути без расхождений в содержимом;
 - установить GSettings schema в manifest;
 - определить корректный способ сборки и установки Blueprint/GResource;
 - добавить/сгенерировать `flatpak/generated-sources.json` после фиксации зависимостей;

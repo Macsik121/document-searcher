@@ -1,49 +1,96 @@
 # Document Searcher
 
-Desktop application for searching documents on ALT Linux. The project is being developed in stages: the document-search core and a small CLI can be exercised on Windows, while the GTK/Libadwaita interface, portals, OCR and Flatpak packaging require Linux (ultimately the ALT Linux VM).
+Document Searcher is a Rust document-search application for ALT Linux. The
+feature-free core and CLI can be exercised on Windows; the GTK/Libadwaita UI,
+portals, GSettings runtime, OCR, and Flatpak are Linux-only and must be
+validated in the ALT Linux VM.
 
-## Core development on Windows
+## Windows core workflow
 
-Install Rust stable (the repository pins Rust 1.78.0 in `src/rust-toolchain.toml`). Open a new PowerShell after installation so Cargo is on `PATH`. If it is not, use the temporary PATH setup shown below.
-
-Run commands from the repository root with `--manifest-path`, or change directory to `src/` first:
-
-```powershell
-$env:Path = "$env:USERPROFILE\.cargo\bin;" + $env:Path
-Set-Location .\src
-cargo fmt --check
-cargo test --lib --no-default-features
-cargo clippy --lib --tests --no-default-features -- -D warnings
-cargo run --no-default-features -- scan <directory>
-cargo run --no-default-features -- search <directory> <query>
-```
-
-Equivalent commands from the repository root:
+The default feature set is intentionally empty. From the repository root, use
+only `--no-default-features` on Windows:
 
 ```powershell
+cargo fmt --check --manifest-path .\src\Cargo.toml
 cargo test --manifest-path .\src\Cargo.toml --lib --no-default-features
+cargo clippy --manifest-path .\src\Cargo.toml --lib --tests --no-default-features -- -D warnings
 cargo run --manifest-path .\src\Cargo.toml --no-default-features -- scan <directory>
 cargo run --manifest-path .\src\Cargo.toml --no-default-features -- search <directory> <query>
 ```
 
-The default build excludes GTK and OCR native dependencies. It checks scanning, UTF-8 text/DOCX/PDF text-layer extraction, and Unicode-aware searching. Image OCR and scanned-PDF OCR require the `ocr` feature, Tesseract/Leptonica, language data, and `pdftoppm`; those should be validated in Linux. The GTK application is not currently a Windows target because GTK/Libadwaita/portal dependencies are Linux desktop dependencies.
+The CLI scans supported files, reports skipped oversized/unreadable entries,
+and searches extracted text with Unicode-aware case-insensitive matching and up
+to 20 characters of context on each side. The core includes text, DOCX, and
+PDF text-layer extraction. Image and scanned-PDF OCR requires the Linux `ocr`
+/ `desktop` build, Tesseract, Leptonica, `pdftoppm`, and matching tessdata.
 
-## Linux / ALT Linux validation
+Do not run the `desktop` feature, native GUI smoke tests, OCR integration, or
+Flatpak commands on Windows. A successful core check does not verify GTK,
+portal, GSettings, OCR, or Flatpak behavior.
 
-From `src/`, validate the core first:
+## Linux / ALT Linux workflow
+
+The Linux desktop build requires GTK4, Libadwaita, GLib development tools,
+Tesseract/Leptonica, `pdftoppm`, pkg-config, and the ashpd portal runtime.
+Blueprint Compiler is not required: the UI is built procedurally in
+`src/src/app.rs`. During a Linux desktop build, `build.rs` automatically runs
+`glib-compile-resources` for `data/resources/gresource.xml` and
+`glib-compile-schemas` for the GSettings schema. The CSS resource is embedded
+in the binary, so no `.gresource` installation step is needed.
+
+From `src/` in the ALT Linux VM:
 
 ```sh
 cargo fmt --check
-cargo test --lib
-cargo clippy --lib --tests -- -D warnings
+cargo test --lib --no-default-features
+cargo clippy --lib --tests --no-default-features -- -D warnings
+cargo build --release --features desktop
+cargo run --release --features desktop
 ```
 
-The GUI build additionally requires GTK4, Libadwaita, Blueprint Compiler, GLib development tools, and the portal. Flatpak build instructions are in [`src/BUILD_INSTRUCTIONS.md`](src/BUILD_INSTRUCTIONS.md); the manifest and desktop application still need final integration and end-to-end verification.
+The native desktop checks must cover startup, embedded CSS, default
+`/home/documents`, GSettings `scan-path` persistence, portal folder selection,
+scan/search, pagination, cancellation, and GIO file opening. Record them
+separately from Windows core validation.
 
-## Specifications
+## Flatpak workflow (ALT Linux VM only)
 
-See [`docs/specs/`](docs/specs/) for the subject-area analysis, requirements, and system design.
+The sole manifest is
+[`src/flatpak/org.gtk.DocumentSearcher.json`](src/flatpak/org.gtk.DocumentSearcher.json).
+After the lockfile is stable, generate its offline Cargo sources in the Linux
+VM; do not create or claim this generated file on Windows:
 
-## Current development status
+```sh
+cd src
+cargo flatpak-generator --output flatpak/generated-sources.json
+flatpak-builder --force-clean --install-deps-from=flathub \
+  flatpak/build-dir flatpak/org.gtk.DocumentSearcher.json
+flatpak-builder --force-clean --user --install \
+  flatpak/build-dir flatpak/org.gtk.DocumentSearcher.json
+flatpak run org.gtk.DocumentSearcher
+```
 
-The core scanner, extractors, Unicode-aware matcher, Tokio worker, and Windows-friendly CLI are under active development. The GTK/Relm4 application, portal-based folder selection, GSettings persistence, and Flatpak packaging remain unfinished; do not treat the current CLI as the final desktop application.
+The manifest installs desktop metadata and the GSettings schema. The
+GResource is embedded in the binary and is not copied separately. Verify the
+portal permissions, schema lookup, CSS lookup, OCR runtime, and file opening
+inside the Flatpak before treating packaging as complete.
+
+The extractor default historically uses `eng+rus`, while the current manifest
+sets `DOCUMENT_SEARCHER_OCR_LANG=eng` and supplies English tessdata. This
+mismatch is documented and must be resolved only after a Linux OCR check.
+
+## Specifications and architecture
+
+- [Specifications](docs/specs/)
+- [Architecture documentation](docs/architecture/)
+- [ALT Linux run guide](docs/ALT-LINUX-RUN.md)
+- [Build instructions](src/BUILD_INSTRUCTIONS.md)
+
+`docs/specs/requirements-spec.md` is the user-owned requirements source and is
+not rewritten by implementation work.
+
+## Current status
+
+The scanner, extractors, Unicode-aware matcher, Tokio worker, and CLI are
+available for core checks. Desktop integration is implemented in the current
+source path but remains unverified until the ALT Linux VM checks are run.

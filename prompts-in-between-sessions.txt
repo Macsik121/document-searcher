@@ -1,0 +1,103 @@
+###########################
+######## Prompt 1 #########
+###########################
+
+Продолжи разработку Document Searcher (Rust + GTK4/Libadwaita + Tokio worker + Flatpak + Tesseract OCR) для ALT Linux.
+
+Сначала прочитай утверждённый план — это единый источник правды по объёму работы:
+@~/.claude/plans/document-searcher-piped-cat.md
+
+ЖЁСТКИЕ ОГРАНИЧЕНИЯ (соблюдать неукоснительно):
+- Коммит не создавать без отдельного явного запроса пользователя.
+- Не переписывать и не откатывать docs/specs/requirements-spec.md (пользовательские правки сохранять как есть).
+- На Windows выполнять ТОЛЬКО --no-default-features: core tests, clippy, fmt, CLI smoke. НЕ запускать desktop feature на Windows.
+- НЕ объявлять native GUI / portal / GSettings / OCR / Flatpak проверенными на основании Windows core checks. Эти проверки только в ALT Linux VM.
+- Git attribution: коммиты заканчивать строкой "Co-Authored-By: Claude Code <noreply@anthropic.com>"; PR-описания — "🤖 Generated with [Claude Code](https://claude.com/claude-code)".
+
+ФАЙЛЫ ДЛЯ ПЕРВОГО ЧТЕНИЯ:
+- src/Cargo.toml, src/build.rs, src/src/lib.rs, src/src/main.rs, src/src/app.rs
+- src/src/model/{actions,extractor,scanner,search,worker,state}.rs
+- src/data/resources/gresource.xml, src/data/org.gtk.DocumentSearcher.gschema.xml
+- src/flatpak/org.gtk.DocumentSearcher.json
+- docs/specs/requirements-spec.md (не трогать), docs/postmortem-session-2026-11-07.md (обновить в stage 6)
+
+ЧТО УЖЕ СДЕЛАНО В ПРЕДЫДУЩЕЙ СЕССИИ (не переделывать):
+1. Cargo.toml: gtk-rs stack поднят (libadwaita 0.5→0.6, gtk4 0.7→0.8, gio 0.18→0.19, relm4 0.7→0.8), чтобы разрешить gtk4-sys links conflict от ashpd 0.8.2 (gtk4 feature требует gtk4 0.8).
+2. worker.rs: добавлен отсутствующий метод next_scan_generation() (start_scan его вызывал, но метода не было).
+3. scanner.rs: удалён неиспользуемый импорт PathBuf.
+4. search.rs: исправлены два pre-existing бага в find_occurrences_with_context:
+   (a) empty-query underflow panic — добавлен ранний return при пустом folded_query;
+   (b) инвертированный предикат source-boundary (был !=, стал ==), из-за которого все валидные char-boundary матчы отвергались и поиск
+   Также search_files уже гардит пустой/whitespace запрос.
+5. cargo fmt применён к build.rs/actions.rs/extractor.rs/scanner.rs/worker.rs/app.rs/main.rs.
+
+ВНИМАНИЕ: исправление search.rs ЕЩЁ НЕ ВЕРИФИЦИРОВАНО. 5 тестов (matches_without_case_sensitivity, empty_query_has_no_matches, creates_context_limited_to_twenty_characters, handles_unicode_offsets_and_context, finds_multiple_non_overlapping_matches) НЕ перезапускались после финального фикса.
+
+С ЧЕГО НАЧАТЬ (по порядку):
+1. Верифицировать фикс:
+   cargo test --manifest-path .\src\Cargo.toml --lib --no-default-features
+   Если 5 тестов падают — диагностировать и починить search.rs ДО продолжения плана.
+2. cargo fmt --check --manifest-path .\src\Cargo.toml
+3. cargo clippy --manifest-path .\src\Cargo.toml --lib --tests --no-default-features -- -D warnings
+4. CLI smoke: cargo run --manifest-path .\src\Cargo.toml --no-default-features -- scan <dir> / search <dir> <query>
+5. Затем этапы плана 2–6:
+   - Stage 2: embed GResource — в build.rs оставить Linux-only glib-compile-resources и DOCUMENT_SEARCHER_GRESOURCE env; в app.rs заменить gio::Resource::load(env!("...")) на include_bytes!(env!("DOCUMENT_SEARCHER_GRESOURCE")) + glib::Bytes::from_static + gio::Resource::from_data + gio::resources_register. Resource path /org/gtk/DocumentSearcher/styles.css не менять. Flatpak не должен устанавливать .gresource отдельно.
+   - Stage 3: удалить src/src/utils.rs и src/data/resources/window.blp; обновить module-комментарий в app.rs (не ссылаться на window.blp).
+   - Stage 4: обновить README.md, src/BUILD_INSTRUCTIONS.md, docs/ALT-LINUX-RUN.md (Windows scope --no-default-features; убрать blueprint-compiler; единственный manifest src/flatpak/org.gtk.DocumentSearcher.json; embedded GResource; cargo flatpak-generator как Linux/VM шаг; OCR mismatch eng vs eng+rus без изменений без Linux-проверки).
+   - Stage 5: создать docs/architecture/ — README.md, component-architecture.md, scan-search-sequence.md, user-flow.md, deployment.md, state-and-data-model.md, assumptions-gaps.md (Mermaid). Диаграммы только по runnable code: build_ui(), load_settings(), choose_folder(), open_file(), RuntimeBridge, Worker, model modules.
+   - Stage 6: обновить docs/postmortem-session-2026-11-07.md фактическими результатами этой и следующей сессии.
+6. Статическая validation (verification шаг 6 плана): нет org.example ссылок в manifest/data/docs; нет file://+Path::display() в runnable code; нет gio::Resource::load из runtime OUT_DIR; ровно один Flatpak manifest; window.blp/utils.rs не referenced.
+7. Linux VM проверки (cargo build --release --features desktop, GUI smoke, cargo flatpak-generator, flatpak-builder, flatpak run) — фиксировать отдельно от Windows core validation.
+
+###########################
+######## Prompt 2 #########
+###########################
+
+Продолжаю разработку Document Searcher (Rust + GTK4/Libadwaita + Tokio worker +
+Tesseract OCR + Flatpak, целевая платформа ALT Linux). Контекста предыдущих
+сессий нет — вся актуальная информация в репозитории.
+
+Прочитай в первую очередь (в этом порядке):
+1. docs/postmortem-session-2026-11-07.md — фактическое состояние на 2026-11-08:
+   что сделано и проверено, что не проверено.
+2. docs/architecture/README.md и связанные диаграммы — текущая архитектура
+   (core/desktop/Flatpak, procedural UI, RuntimeBridge, worker).
+3. docs/ALT-LINUX-RUN.md и src/BUILD_INSTRUCTIONS.md — команды для этой VM.
+4. Ключевой код: src/Cargo.toml, src/build.rs, sr,
+   src/src/model/{actions,state,scanner,extractor,search,worker}.rs,
+   src/flatpak/org.gtk.DocumentSearcher.json (единственный manifest).
+
+Уже сделано и проверено на Windows (только core, --no-default-features):
+18 lib-тестов, fmt, clippy -D warnings, CLI smoke scan/search. GResource
+встроен в бинарник через include_bytes!(env!("DOCUMENT_SEARCHER_GRESOURCE")),
+utils.rs и window.blp удалены, документация синхронизирована.
+
+Оставшаяся работа — ТОЛЬКО в ALT Linux VM:
+1. cargo build --release --features desktop — нативная desktop-сборка.
+2. GUI smoke: запуск, применение CSS из embedded resource
+   (/org/gtk/DocumentSearcher/styles.css).
+3. Portal folder chooser (ashpd) и открытие файлов через GIO.
+4. GSettings: discovery схемы org.gtk.DocumentSearcher, сохранение/восстановление
+   scan-path между перезапусками.
+5. OCR: решить несоответствие — extractor по умолчанию eng+rus, manifest задаёт
+   DOCUMENT_SEARCHER_OCR_LANG=eng и поставляет только eng.traineddata.
+   Не менять язык/tessdata без фактической провер
+6. Flatpak: cargo flatpak-generator --output flatpak/generated-sources.json
+   (из каталога src/), flatpak-builder, flatpak run org.gtk.DocumentSearcher.
+
+Жёсткие ограничения (обязательны):
+- Коммит не создавать без отдельного явного запроса пользователя.
+- Не переписывать и не откатывать docs/specs/requirements-spec.md.
+- На Windows (если придётся) — только --no-defauly,
+  fmt, CLI smoke; desktop feature на Windows не запускать.
+- Не объявлять GUI/portal/GSettings/OCR/Flatpak проверенными на основании
+  Windows core checks — только по фактическим результатам в VM.
+- ALT Linux использует apt-get (apt-rpm); подсказки по пакетам — в
+  docs/correct_alt_linux_commands.txt.
+
+По результатам VM-проверок дополнить docs/postmortem-session-2026-11-07.md
+фактическими исходами (успех/провал с точным текстом ошибок).
+
+###########################
+######## Prompt 3 #########
+###########################

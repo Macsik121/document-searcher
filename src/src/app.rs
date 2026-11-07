@@ -1,9 +1,8 @@
 //! GTK4/Libadwaita desktop application.
 //!
-//! Layout is built procedurally here; `data/resources/window.blp` is kept only
-//! as the design reference until a separate Blueprint migration. The Tokio
-//! worker runs on its own runtime thread and communicates with the GLib main
-//! loop strictly through `WorkerCommand`/`WorkerEvent` channels.
+//! Layout is built procedurally. The Tokio worker runs on its own runtime
+//! thread and communicates with the GLib main loop strictly through
+//! `WorkerCommand`/`WorkerEvent` channels.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -700,11 +699,11 @@ pub fn run() {
         .compact()
         .init();
 
-    let resource_path = std::path::Path::new(env!("DOCUMENT_SEARCHER_GRESOURCE"));
-    match gio::Resource::load(resource_path) {
-        Ok(resource) => gio::resources_register(&resource),
-        Err(error) => tracing::warn!(%error, "Could not load bundled GTK resources"),
-    }
+    let resource_bytes = include_bytes!(env!("DOCUMENT_SEARCHER_GRESOURCE"));
+    let resource_data = glib::Bytes::from_static(resource_bytes);
+    let resource =
+        gio::Resource::from_data(&resource_data).expect("failed to parse embedded GTK resources");
+    gio::resources_register(&resource);
     adw::init().expect("failed to initialize GTK/Libadwaita");
     let application = adw::Application::builder()
         .application_id(APPLICATION_ID)

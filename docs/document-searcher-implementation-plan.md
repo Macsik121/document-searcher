@@ -1,4 +1,9 @@
-# План разработки Document Searcher
+# Устаревший план разработки Document Searcher
+
+> Исторический документ: описанные ниже Relm4/Blueprint шаги и старые этапы
+> реализации не являются архитектурой текущего runnable приложения. Для
+> текущего состояния используйте `docs/architecture/` и
+> `docs/ALT-LINUX-RUN.md`.
 
 ## Context
 
@@ -12,10 +17,10 @@
 
 - Привести `src/Cargo.toml` к согласованным версиям GTK4/Libadwaita/Relm4 и добавить реально используемые `ashpd`, `serde`, `serde_json`/`tracing` при необходимости; заменить неправильные импорты и выбрать `leptess` как единственную Rust-обёртку Tesseract.
 - Исправить `main.rs`: настроить tracing, создать и корректно завершать выделенный Tokio runtime/worker, затем запускать Relm4/GTK main loop. GTK-код не должен вызывать `tokio::spawn` без runtime.
-- Устранить дублирование UI-источников. Сделать один авторитетный путь отображения; сохранить Blueprint как источник layout согласно SRS, исправить его stale handler/template-поля и подключить сгенерированный ресурс к приложению. Relm4-компоненты должны работать с моделями, а не с индексами строк.
+- Историческое намерение этого этапа — устранить дублирование UI-источников. Текущая реализация использует procedural UI в `app.rs`; Blueprint и прежние widgets не входят в runnable pipeline.
 - Унифицировать идентификатор приложения `org.gtk.DocumentSearcher` во всех ресурсах, desktop entry, metainfo, GResource и Flatpak manifest.
 
-Критические файлы: `src/Cargo.toml`, `src/src/main.rs`, `src/src/app.rs`, `src/build.rs`, `src/data/resources/window.blp`, `src/data/resources/gresource.xml`, `src/data/org.example.DocumentSearcher.desktop`, `src/data/org.example.DocumentSearcher.metainfo.xml`.
+Критические файлы: `src/Cargo.toml`, `src/src/main.rs`, `src/src/app.rs`, `src/build.rs`, `src/data/resources/window.blp`, `src/data/resources/gresource.xml`, `src/data/org.gtk.DocumentSearcher.desktop`, `src/data/org.gtk.DocumentSearcher.metainfo.xml`.
 
 ### 2. Реализовать доменную модель и безопасный scanner
 
@@ -45,7 +50,7 @@
 
 Критические файлы: `src/src/model/actions.rs`, `src/src/model/search.rs`, `src/src/app.rs`; новый модуль `src/src/worker.rs` или `src/src/model/worker.rs`.
 
-### 5. Подключить UI, portal и persistence
+### 5. Исторический план UI, portal и persistence
 
 - Реализовать левую панель: абсолютный каталог, количество файлов, относительные пути, кнопку выбора каталога и deterministic activation по `PathBuf`.
 - Реализовать правую панель: поле поиска, статус/spinner/success/error, результаты с bold/clickable path и визуальным выделением совпадения, кнопку pagination по 100 элементов.
@@ -58,11 +63,11 @@
 
 ### 6. Довести Flatpak и документацию до воспроизводимой сборки
 
-- Исправить manifest `src/flatpak/org.example.DocumentSearcher.json`: единый app-id, binary name, зависимости Leptonica/Tesseract/tessdata, portal permissions, schema/resource installation и Cargo offline source list.
-- Сгенерировать `Cargo.lock` и `flatpak/generated-sources.json` только после стабилизации зависимостей; подключить generated sources в module `document-searcher`. Не оставлять фиктивные SHA/URL или несогласованные `org.example` имена.
+- Исправить manifest `src/flatpak/org.gtk.DocumentSearcher.json`: единый app-id, binary name, зависимости Leptonica/Tesseract/tessdata, portal permissions, schema/resource installation и Cargo offline source list.
+- Сгенерировать `Cargo.lock` и `flatpak/generated-sources.json` только после стабилизации зависимостей; подключить generated sources в module `document-searcher`. Не оставлять фиктивные SHA/URL или несогласованные application ID.
 - Обновить `src/BUILD_INSTRUCTIONS.md` и README-команды под фактическое расположение crate (`src/`) и фактические имена артефактов. В метаданных перечислить поддерживаемые форматы из SRS, а не устаревшие RTF/ODT-only.
 
-Критические файлы: `src/flatpak/org.example.DocumentSearcher.json`, `src/BUILD_INSTRUCTIONS.md`, `README.md`, desktop/metainfo resources.
+Критические файлы: `src/flatpak/org.gtk.DocumentSearcher.json`, `src/BUILD_INSTRUCTIONS.md`, `README.md`, desktop/metainfo resources.
 
 ## Проверка
 
