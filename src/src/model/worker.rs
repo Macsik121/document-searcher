@@ -67,7 +67,8 @@ impl Worker {
         let current_generation = Arc::clone(&self.scan_generation);
         let events = events.clone();
         self.scan_task = Some(tokio::spawn(async move {
-            let result = tokio::task::spawn_blocking(move || scan_directory_with_report(&root)).await;
+            let result =
+                tokio::task::spawn_blocking(move || scan_directory_with_report(&root)).await;
             if current_generation.load(Ordering::Acquire) != generation {
                 return;
             }
@@ -99,7 +100,9 @@ impl Worker {
                 Err(error) => {
                     if current_generation.load(Ordering::Acquire) == generation {
                         let _ = events
-                            .send(WorkerEvent::ScanError(format!("Scanner task failed: {error}")))
+                            .send(WorkerEvent::ScanError(format!(
+                                "Scanner task failed: {error}"
+                            )))
                             .await;
                     }
                 }
@@ -250,6 +253,10 @@ impl Worker {
         self.search_generation.fetch_add(1, Ordering::AcqRel) + 1
     }
 
+    fn next_scan_generation(&self) -> u64 {
+        self.scan_generation.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
     fn cancel_search(&mut self) {
         if let Some(cancel) = self.search_cancel.take() {
             cancel.cancel();
@@ -329,7 +336,10 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(matches!(event_rx.recv().await, Some(WorkerEvent::ScanStarted)));
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(WorkerEvent::ScanStarted)
+        ));
         assert!(matches!(
             event_rx.recv().await,
             Some(WorkerEvent::ScanCompleted { .. })
@@ -367,7 +377,10 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(matches!(event_rx.recv().await, Some(WorkerEvent::ScanStarted)));
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(WorkerEvent::ScanStarted)
+        ));
         assert!(matches!(
             event_rx.recv().await,
             Some(WorkerEvent::ScanCompleted { .. })

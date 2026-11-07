@@ -108,3 +108,23 @@ The Document Searcher is a native desktop application designed to perform deep, 
 
 \*   \*\*NFR-3 (Resilience):\*\* Corrupted files, encrypted PDFs, or unsupported encoding must not crash the worker thread. The extractor must log the failure, gracefully skip the file, and continue the loop.
 
+
+
+Продолжи разработку проекта Document Searcher.
+
+## Ключевые файлы
+
+1. `~/.claude/plans/rustling-painting-ladybug.md` — план текущего этапа (desktop MVP)
+2. `docs/postmortem-session-2026-11-07.md` — что сделано, что осталось
+
+## Контекст
+
+Desktop-приложение для поиска документов на ALT Linux. Стек: Rust, GTK4/Libadwaita, Flatpak. Core (scanner, extractor, search, worker) готов и работает на Windows. Desktop integration продвинута — см. postmortem.
+
+## Точка входа
+
+По плану (пункт 6): проверка на Linux. На Windows можно: core tests, refactoring `build.rs`, документация.
+
+---
+
+Файлы плана и postmortem содержат всю нужную информацию. Если возникнут вопросы по требованиям — тогда читать @docs/specs.

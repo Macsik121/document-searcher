@@ -14,8 +14,9 @@ fn run_tool(program: &str, args: &[&str]) {
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed=data/resources/window.blp");
     println!("cargo:rerun-if-changed=data/resources/gresource.xml");
+    println!("cargo:rerun-if-changed=data/resources/styles.css");
+    println!("cargo:rerun-if-changed=data/org.gtk.DocumentSearcher.gschema.xml");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_DESKTOP");
 
     // The core/CLI build deliberately has no GTK toolchain requirement. This keeps
@@ -25,24 +26,14 @@ fn main() {
     }
 
     if !cfg!(target_os = "linux") {
-        println!("cargo:warning=desktop resources are only built on Linux");
-        return;
+        panic!(
+            "the desktop feature requires a Linux GTK/GLib toolchain; use --no-default-features on Windows"
+        );
     }
 
-    let blueprint_input = Path::new("data/resources/window.blp");
-    let blueprint_output = Path::new("data/resources/window.ui");
-    run_tool(
-        "blueprint-compiler",
-        &[
-            "compile",
-            "--output",
-            blueprint_output.to_str().expect("non-UTF-8 output path"),
-            blueprint_input.to_str().expect("non-UTF-8 input path"),
-        ],
-    );
-
+    let out_dir = env::var("OUT_DIR").expect("Cargo did not set OUT_DIR");
     let gresource_xml = Path::new("data/resources/gresource.xml");
-    let gresource_output = Path::new("data/resources/org.gtk.DocumentSearcher.gresource");
+    let gresource_output = Path::new(&out_dir).join("org.gtk.DocumentSearcher.gresource");
     run_tool(
         "glib-compile-resources",
         &[
@@ -52,5 +43,26 @@ fn main() {
             "data/resources",
             gresource_xml.to_str().expect("non-UTF-8 resource path"),
         ],
+    );
+    println!(
+        "cargo:rustc-env=DOCUMENT_SEARCHER_GRESOURCE={}",
+        gresource_output.display()
+    );
+
+    let schema_output = Path::new(&out_dir).join("schemas");
+    std::fs::create_dir_all(&schema_output).expect("could not create schema output directory");
+    run_tool(
+        "glib-compile-schemas",
+        &[
+            "--targetdir",
+            schema_output
+                .to_str()
+                .expect("non-UTF-8 schema output path"),
+            "data",
+        ],
+    );
+    println!(
+        "cargo:rustc-env=DOCUMENT_SEARCHER_SCHEMA_DIR={}",
+        schema_output.display()
     );
 }

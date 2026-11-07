@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use walkdir::{DirEntry, WalkDir};
 
@@ -7,8 +7,8 @@ use crate::model::state::FileEntry;
 pub const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
 
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "txt", "md", "rs", "toml", "json", "xml", "html", "css", "js",
-    "ts", "pdf", "docx", "png", "jpg", "jpeg", "tiff", "bmp",
+    "txt", "md", "rs", "toml", "json", "xml", "html", "css", "js", "ts", "pdf", "docx", "png",
+    "jpg", "jpeg", "tiff", "bmp",
 ];
 
 #[derive(Debug, Default)]
@@ -42,7 +42,10 @@ pub fn scan_directory(root_path: &Path) -> anyhow::Result<Vec<FileEntry>> {
 
 pub fn scan_directory_with_report(root_path: &Path) -> anyhow::Result<ScanReport> {
     if !root_path.is_dir() {
-        anyhow::bail!("Selected path is not a readable directory: {}", root_path.display());
+        anyhow::bail!(
+            "Selected path is not a readable directory: {}",
+            root_path.display()
+        );
     }
 
     let root_path = root_path.canonicalize()?;

@@ -20,7 +20,8 @@ const TEXT_EXTENSIONS: &[&str] = &[
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tiff", "bmp"];
 
 pub fn extract_text(path: &Path) -> Result<String> {
-    let metadata = fs::metadata(path).with_context(|| format!("Cannot access {}", path.display()))?;
+    let metadata =
+        fs::metadata(path).with_context(|| format!("Cannot access {}", path.display()))?;
     if metadata.len() > MAX_FILE_SIZE {
         anyhow::bail!("File exceeds the 50 MiB extraction limit");
     }
@@ -56,8 +57,12 @@ pub fn extract_text(path: &Path) -> Result<String> {
 }
 
 fn extract_plain_text(path: &Path) -> Result<String> {
-    fs::read_to_string(path)
-        .with_context(|| format!("Text file is unreadable or is not UTF-8: {}", path.display()))
+    fs::read_to_string(path).with_context(|| {
+        format!(
+            "Text file is unreadable or is not UTF-8: {}",
+            path.display()
+        )
+    })
 }
 
 fn extract_docx_text(path: &Path) -> Result<String> {
@@ -130,7 +135,10 @@ fn extract_scanned_pdf_text(path: &Path) -> Result<String> {
         std::process::id()
     ));
     fs::create_dir(&directory).with_context(|| {
-        format!("Could not create temporary PDF rendering directory {}", directory.display())
+        format!(
+            "Could not create temporary PDF rendering directory {}",
+            directory.display()
+        )
     })?;
 
     let result = (|| {
@@ -177,10 +185,10 @@ fn extract_scanned_pdf_text(_path: &Path) -> Result<String> {
 
 #[cfg(feature = "ocr")]
 fn extract_image_text(path: &Path) -> Result<String> {
-    let language = std::env::var("DOCUMENT_SEARCHER_OCR_LANG")
-        .unwrap_or_else(|_| "eng+rus".to_owned());
-    let mut engine = leptess::LepTess::new(None, &language)
-        .context("Could not initialize Tesseract OCR")?;
+    let language =
+        std::env::var("DOCUMENT_SEARCHER_OCR_LANG").unwrap_or_else(|_| "eng+rus".to_owned());
+    let mut engine =
+        leptess::LepTess::new(None, &language).context("Could not initialize Tesseract OCR")?;
     engine
         .set_image(path)
         .with_context(|| format!("Could not open image {} for OCR", path.display()))?;

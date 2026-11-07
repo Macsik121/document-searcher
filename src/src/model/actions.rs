@@ -12,21 +12,33 @@ pub enum WorkerCommand {
 #[derive(Debug)]
 pub enum WorkerEvent {
     ScanStarted,
-    ScanProgress { completed: usize },
+    ScanProgress {
+        completed: usize,
+    },
     ScanCompleted {
         files: Vec<FileEntry>,
         oversized_files: usize,
         unreadable_entries: usize,
     },
     ScanError(String),
-    SearchStarted { query: String },
-    SearchProgress { completed: usize, total: usize },
+    SearchStarted {
+        query: String,
+    },
+    SearchProgress {
+        completed: usize,
+        total: usize,
+    },
     SearchCompleted {
         query: String,
         results: Vec<SearchMatch>,
     },
-    SearchCancelled { query: String },
-    SearchError { query: String, error: String },
+    SearchCancelled {
+        query: String,
+    },
+    SearchError {
+        query: String,
+        error: String,
+    },
 }
 
 #[derive(Debug)]

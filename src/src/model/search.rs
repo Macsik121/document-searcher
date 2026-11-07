@@ -20,7 +20,10 @@ impl FoldedText {
                 source_spans.push((start, end));
             }
         }
-        Self { chars, source_spans }
+        Self {
+            chars,
+            source_spans,
+        }
     }
 }
 pub fn search_files(files: &[FileEntry], query: &str) -> anyhow::Result<Vec<SearchMatch>> {
@@ -55,7 +58,10 @@ pub fn search_files(files: &[FileEntry], query: &str) -> anyhow::Result<Vec<Sear
         results.push(SearchMatch {
             file_relative_path: file.relative_path.clone(),
             file_absolute_path: file.absolute_path.clone(),
-            contexts: occurrences.iter().map(|item| item.snippet.clone()).collect(),
+            contexts: occurrences
+                .iter()
+                .map(|item| item.snippet.clone())
+                .collect(),
             occurrences,
         });
     }
@@ -63,6 +69,10 @@ pub fn search_files(files: &[FileEntry], query: &str) -> anyhow::Result<Vec<Sear
 }
 
 fn find_occurrences_with_context(text: &str, folded_query: &[char]) -> Vec<SearchOccurrence> {
+    if folded_query.is_empty() {
+        return Vec::new();
+    }
+
     let folded_text = FoldedText::new(text);
     if folded_query.len() > folded_text.chars.len() {
         return Vec::new();
@@ -86,10 +96,10 @@ fn find_occurrences_with_context(text: &str, folded_query: &[char]) -> Vec<Searc
         let folded_end = folded_start + folded_query.len();
         let source_start = folded_text.source_spans[folded_start].0;
         let source_end = folded_text.source_spans[folded_end - 1].1;
-        let starts_at_source_boundary = folded_start == 0
-            || folded_text.source_spans[folded_start - 1].1 != source_start;
+        let starts_at_source_boundary =
+            folded_start == 0 || folded_text.source_spans[folded_start - 1].1 == source_start;
         let ends_at_source_boundary = folded_end == folded_text.source_spans.len()
-            || folded_text.source_spans[folded_end].0 != source_end;
+            || folded_text.source_spans[folded_end].0 == source_end;
         if !starts_at_source_boundary || !ends_at_source_boundary {
             search_from = folded_start + 1;
             continue;
@@ -98,7 +108,8 @@ fn find_occurrences_with_context(text: &str, folded_query: &[char]) -> Vec<Searc
         let start_char = char_boundaries.binary_search(&source_start).unwrap();
         let end_char = char_boundaries.binary_search(&source_end).unwrap();
         let context_start = char_boundaries[start_char.saturating_sub(CONTEXT_CHARS)];
-        let context_end = char_boundaries[(end_char + CONTEXT_CHARS).min(char_boundaries.len() - 1)];
+        let context_end =
+            char_boundaries[(end_char + CONTEXT_CHARS).min(char_boundaries.len() - 1)];
         let before = text[context_start..source_start].to_owned();
         let matched = text[source_start..source_end].to_owned();
         let after = text[source_end..context_end].to_owned();

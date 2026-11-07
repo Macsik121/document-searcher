@@ -1,11 +1,22 @@
+#[cfg(feature = "desktop")]
+#[path = "app.rs"]
+mod app;
+
+#[cfg(not(feature = "desktop"))]
 use document_searcher::model;
+#[cfg(not(feature = "desktop"))]
 use std::env;
+#[cfg(not(feature = "desktop"))]
 use std::path::Path;
+#[cfg(not(feature = "desktop"))]
 use std::process::ExitCode;
 
+#[cfg(not(feature = "desktop"))]
 use model::scanner::scan_directory_with_report;
+#[cfg(not(feature = "desktop"))]
 use model::search::search_files;
 
+#[cfg(not(feature = "desktop"))]
 fn print_help(program: &str) {
     println!(
         "Document Searcher\n\n\
@@ -16,6 +27,7 @@ fn print_help(program: &str) {
     );
 }
 
+#[cfg(not(feature = "desktop"))]
 fn print_scan(root: &Path) -> anyhow::Result<()> {
     let report = scan_directory_with_report(root)?;
     println!("Folder: {}", root.display());
@@ -32,6 +44,7 @@ fn print_scan(root: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn print_search(root: &Path, query: &str) -> anyhow::Result<()> {
     let report = scan_directory_with_report(root)?;
     let results = search_files(&report.files, query)?;
@@ -45,9 +58,12 @@ fn print_search(root: &Path, query: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn run() -> anyhow::Result<()> {
     let mut args = env::args();
-    let program = args.next().unwrap_or_else(|| "document-searcher".to_owned());
+    let program = args
+        .next()
+        .unwrap_or_else(|| "document-searcher".to_owned());
     let Some(command) = args.next() else {
         print_help(&program);
         return Ok(());
@@ -87,6 +103,7 @@ fn run() -> anyhow::Result<()> {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -95,4 +112,9 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+#[cfg(feature = "desktop")]
+fn main() {
+    app::run();
 }

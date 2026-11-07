@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gtk.DocumentSearcher" path="/org/gtk/DocumentSearcher/">
+    <key name="scan-path" type="s">
+      <default>'/home/documents'</default>
+      <summary>Directory to search</summary>
+      <description>The last directory selected for document search.</description>
+    </key>
+  </schema>
+</schemalist>

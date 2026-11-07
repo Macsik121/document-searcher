@@ -12,7 +12,8 @@
     "--device=dri",
     "--filesystem=home:ro",
     "--talk-name=org.freedesktop.portal.Desktop",
-    "--env=TESSDATA_PREFIX=/app/share/tessdata/"
+    "--env=TESSDATA_PREFIX=/app/share/tessdata/",
+    "--env=DOCUMENT_SEARCHER_OCR_LANG=eng"
   ],
   "cleanup": ["/include", "/lib/pkgconfig", "/share/man", "*.a", "*.la"],
   "modules": [
@@ -65,8 +66,10 @@
         ". /usr/lib/sdk/rust-stable/enable",
         "cargo build --release --offline --target-dir=target --no-default-features --features desktop",
         "install -Dm755 target/release/document-searcher /app/bin/document-searcher",
-        "install -Dm644 data/org.example.DocumentSearcher.desktop /app/share/applications/org.gtk.DocumentSearcher.desktop",
-        "install -Dm644 data/org.example.DocumentSearcher.metainfo.xml /app/share/metainfo/org.gtk.DocumentSearcher.metainfo.xml"
+        "install -Dm644 data/org.gtk.DocumentSearcher.desktop /app/share/applications/org.gtk.DocumentSearcher.desktop",
+        "install -Dm644 data/org.gtk.DocumentSearcher.metainfo.xml /app/share/metainfo/org.gtk.DocumentSearcher.metainfo.xml",
+        "install -Dm644 data/org.gtk.DocumentSearcher.gschema.xml /app/share/glib-2.0/schemas/org.gtk.DocumentSearcher.gschema.xml",
+        "glib-compile-schemas /app/share/glib-2.0/schemas"
       ],
       "sources": [
         {"type": "dir", "path": "../"},
