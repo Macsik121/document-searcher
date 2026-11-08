@@ -1,4 +1,35 @@
-﻿[workspace]
-members = ["src"]
-default-members = ["src"]
-resolver = "2"
+﻿[package]
+name = "document-searcher"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["desktop-ui", "ocr"]
+desktop-ui = []
+ocr = []
+windows-ocr = ["ocr"]
+windows-desktop = ["desktop-ui", "ocr"]
+desktop = ["desktop-ui", "ocr"]
+
+[dependencies]
+# Background processing
+tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "fs", "sync", "time"] }
+tokio-util = "0.7"
+
+# Document processing
+anyhow = "1.0"
+lopdf = "0.31"
+pdf-extract = "0.7"
+quick-xml = "0.31"
+walkdir = "2.4"
+zip = "0.6"
+
+# Diagnostics
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"

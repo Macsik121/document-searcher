@@ -1,0 +1,4 @@
+cargo:rerun-if-changed=data/resources/gresource.xml
+cargo:rerun-if-changed=data/resources/styles.css
+cargo:rerun-if-changed=data/org.gtk.DocumentSearcher.gschema.xml
+cargo:rerun-if-env-changed=CARGO_FEATURE_DESKTOP

@@ -41,7 +41,7 @@ fn cache_store() -> &'static RwLock<HashMap<CacheKey, CacheValue>> {
 
 /// Normalizes Windows extended-length verbatim paths (`\\?\C:\...` and
 /// `\\?\UNC\server\share\...`) produced by `Path::canonicalize()` into standard
-/// paths accepted by Win32 Shell APIs and external CLI tools.
+/// paths accepted by OS Shell APIs and external CLI tools.
 pub fn normalize_platform_path(path: &Path) -> PathBuf {
     let raw = path.to_string_lossy();
     if let Some(unc_tail) = raw.strip_prefix(r"\\?\UNC\") {
@@ -271,7 +271,7 @@ fn parse_hex_token(token: &str) -> Option<Vec<u8>> {
     if hex.is_empty() || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
-    let padded = if hex.len() % 2 != 0 {
+    let padded = if !hex.len().is_multiple_of(2) {
         format!("{hex}0")
     } else {
         hex.to_owned()
@@ -471,7 +471,7 @@ fn decode_pdf_bytes_with_font(bytes: &[u8], font_map: Option<&FontCharMap>) -> S
     }
 
     if let Some(map) = font_map {
-        if !map.two_byte.is_empty() && bytes.len() >= 2 && bytes.len() % 2 == 0 {
+        if !map.two_byte.is_empty() && bytes.len() >= 2 && bytes.len().is_multiple_of(2) {
             let mut out = String::with_capacity(bytes.len());
             let mut matched_any = false;
             let mut idx = 0;
@@ -583,10 +583,8 @@ fn extract_page_custom_text(doc: &Document, page_id: ObjectId) -> String {
                     page_text.push(' ');
                 }
             }
-            "ET" => {
-                if !page_text.ends_with('\n') {
-                    page_text.push('\n');
-                }
+            "ET" if !page_text.ends_with('\n') => {
+                page_text.push('\n');
             }
             _ => {}
         }
@@ -679,7 +677,7 @@ fn extract_pdf_text(path: &Path) -> Result<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Scanned PDF & Image OCR (Poppler/Tesseract + Windows 10/11 WinRT fallback).
+// Cross-platform Scanned PDF & Image OCR (Windows + ALT Linux + Ubuntu).
 // ---------------------------------------------------------------------------
 
 #[cfg(any(feature = "ocr", feature = "windows-ocr"))]
@@ -696,7 +694,7 @@ fn configure_background_command(command: &mut Command) {
     }
 }
 
-#[cfg(all(feature = "windows-ocr", target_os = "windows"))]
+#[cfg(all(any(feature = "ocr", feature = "windows-ocr"), target_os = "windows"))]
 fn extract_scanned_pdf_via_windows_winrt(path: &Path) -> Result<String> {
     let clean_path = normalize_platform_path(path);
     let ps_script = r#"
@@ -794,7 +792,129 @@ fn resolve_pdftoppm_binary() -> PathBuf {
         }
     }
 
+    #[cfg(not(target_os = "windows"))]
+    {
+        for candidate in [
+            "/usr/bin/pdftoppm",
+            "/usr/local/bin/pdftoppm",
+            "/app/bin/pdftoppm",
+        ] {
+            let path = PathBuf::from(candidate);
+            if path.is_file() {
+                return path;
+            }
+        }
+    }
+
     PathBuf::from("pdftoppm")
+}
+
+#[cfg(any(feature = "ocr", feature = "windows-ocr"))]
+fn resolve_tesseract_binary() -> PathBuf {
+    if let Ok(custom) = std::env::var("DOCUMENT_SEARCHER_TESSERACT_BIN") {
+        let custom_path = PathBuf::from(custom);
+        if custom_path.exists() {
+            return custom_path;
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut candidates = vec![
+            PathBuf::from(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
+            PathBuf::from(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
+        ];
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let mut user_tesseract = PathBuf::from(local_app_data);
+            user_tesseract.push("Programs");
+            user_tesseract.push("Tesseract-OCR");
+            user_tesseract.push("tesseract.exe");
+            candidates.push(user_tesseract);
+        }
+        for candidate in candidates {
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        for candidate in [
+            "/usr/bin/tesseract",
+            "/usr/local/bin/tesseract",
+            "/app/bin/tesseract",
+        ] {
+            let path = PathBuf::from(candidate);
+            if path.is_file() {
+                return path;
+            }
+        }
+    }
+
+    PathBuf::from("tesseract")
+}
+
+#[cfg(any(feature = "ocr", feature = "windows-ocr"))]
+fn run_tesseract_cli(binary: &Path, image_path: &Path, language: &str) -> Result<String> {
+    let mut command = Command::new(binary);
+    configure_background_command(&mut command);
+
+    if std::env::var_os("TESSDATA_PREFIX").is_none() {
+        if let Some(parent) = binary.parent() {
+            let tessdata = parent.join("tessdata");
+            if tessdata.is_dir() {
+                command.env("TESSDATA_PREFIX", &tessdata);
+            }
+        }
+    }
+
+    let output = command
+        .arg(image_path)
+        .arg("stdout")
+        .args(["-l", language])
+        .output()
+        .with_context(|| {
+            format!(
+                "Could not execute Tesseract OCR ({})",
+                binary.to_string_lossy()
+            )
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "Tesseract OCR failed ({}): {}",
+            output.status,
+            stderr.trim()
+        );
+    }
+
+    String::from_utf8(output.stdout).context("Tesseract OCR output is not valid UTF-8")
+}
+
+#[cfg(any(feature = "ocr", feature = "windows-ocr"))]
+fn extract_image_text(path: &Path) -> Result<String> {
+    let binary = resolve_tesseract_binary();
+    let clean_path = normalize_platform_path(path);
+    let language_env = std::env::var("DOCUMENT_SEARCHER_OCR_LANG").ok();
+    let language = language_env.as_deref().unwrap_or("eng+rus");
+
+    match run_tesseract_cli(&binary, &clean_path, language) {
+        Ok(text) => Ok(text),
+        Err(first_error) if language_env.is_none() => {
+            if let Ok(rus_text) = run_tesseract_cli(&binary, &clean_path, "rus") {
+                return Ok(rus_text);
+            }
+            run_tesseract_cli(&binary, &clean_path, "eng").or(Err(first_error))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(not(any(feature = "ocr", feature = "windows-ocr")))]
+fn extract_image_text(_path: &Path) -> Result<String> {
+    anyhow::bail!("OCR is disabled in this build")
 }
 
 #[cfg(any(feature = "ocr", feature = "windows-ocr"))]
@@ -867,7 +987,7 @@ fn extract_scanned_pdf_text(path: &Path) -> Result<String> {
         return pdftoppm_result;
     }
 
-    #[cfg(all(feature = "windows-ocr", target_os = "windows"))]
+    #[cfg(target_os = "windows")]
     {
         if let Ok(winrt_text) = extract_scanned_pdf_via_windows_winrt(path) {
             return Ok(winrt_text);
@@ -880,107 +1000,6 @@ fn extract_scanned_pdf_text(path: &Path) -> Result<String> {
 #[cfg(not(any(feature = "ocr", feature = "windows-ocr")))]
 fn extract_scanned_pdf_text(_path: &Path) -> Result<String> {
     anyhow::bail!("PDF has no text layer; scanned-PDF OCR requires the ocr feature and pdftoppm")
-}
-
-#[cfg(feature = "ocr")]
-fn extract_image_text(path: &Path) -> Result<String> {
-    let language =
-        std::env::var("DOCUMENT_SEARCHER_OCR_LANG").unwrap_or_else(|_| "eng+rus".to_owned());
-    let mut engine =
-        leptess::LepTess::new(None, &language).context("Could not initialize Tesseract OCR")?;
-    engine
-        .set_image(path)
-        .with_context(|| format!("Could not open image {} for OCR", path.display()))?;
-    engine.get_utf8_text().context("Tesseract OCR failed")
-}
-
-#[cfg(all(feature = "windows-ocr", not(feature = "ocr")))]
-fn resolve_tesseract_binary() -> PathBuf {
-    if let Ok(custom) = std::env::var("DOCUMENT_SEARCHER_TESSERACT_BIN") {
-        let custom_path = PathBuf::from(custom);
-        if custom_path.exists() {
-            return custom_path;
-        }
-    }
-
-    let mut candidates = vec![
-        PathBuf::from(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
-        PathBuf::from(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
-    ];
-    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        let mut user_tesseract = PathBuf::from(local_app_data);
-        user_tesseract.push("Programs");
-        user_tesseract.push("Tesseract-OCR");
-        user_tesseract.push("tesseract.exe");
-        candidates.push(user_tesseract);
-    }
-
-    for candidate in candidates {
-        if candidate.is_file() {
-            return candidate;
-        }
-    }
-
-    PathBuf::from("tesseract")
-}
-
-#[cfg(all(feature = "windows-ocr", not(feature = "ocr")))]
-fn run_tesseract_cli(binary: &Path, image_path: &Path, language: &str) -> Result<String> {
-    let mut command = Command::new(binary);
-    configure_background_command(&mut command);
-
-    if std::env::var_os("TESSDATA_PREFIX").is_none() {
-        if let Some(parent) = binary.parent() {
-            let tessdata = parent.join("tessdata");
-            if tessdata.is_dir() {
-                command.env("TESSDATA_PREFIX", &tessdata);
-            }
-        }
-    }
-
-    let output = command
-        .arg(image_path)
-        .arg("stdout")
-        .args(["-l", language])
-        .output()
-        .with_context(|| {
-            format!(
-                "Could not execute Tesseract OCR ({})",
-                binary.to_string_lossy()
-            )
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "Tesseract OCR failed ({}): {}",
-            output.status,
-            stderr.trim()
-        );
-    }
-
-    String::from_utf8(output.stdout).context("Tesseract OCR output is not valid UTF-8")
-}
-
-#[cfg(all(feature = "windows-ocr", not(feature = "ocr")))]
-fn extract_image_text(path: &Path) -> Result<String> {
-    let binary = resolve_tesseract_binary();
-    let clean_path = normalize_platform_path(path);
-    let language_env = std::env::var("DOCUMENT_SEARCHER_OCR_LANG").ok();
-    let language = language_env.as_deref().unwrap_or("eng+rus");
-
-    match run_tesseract_cli(&binary, &clean_path, language) {
-        Ok(text) => Ok(text),
-        Err(first_error) if language_env.is_none() && language != "eng" => {
-            run_tesseract_cli(&binary, &clean_path, "eng").or(Err(first_error))
-        }
-        Err(error) => Err(error),
-    }
-}
-
-#[cfg(not(any(feature = "ocr", feature = "windows-ocr")))]
-fn extract_image_text(_path: &Path) -> Result<String> {
-    anyhow::bail!("OCR is only available in the desktop build")
 }
 
 #[cfg(test)]

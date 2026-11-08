@@ -1,0 +1,11 @@
+C:\Users\максим\Documents\programming\projects\document-searcher\src\target\release\deps\bzip2-4620ab29c5706d19.d: C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\lib.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\mem.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\bufread.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\read.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\write.rs
+
+C:\Users\максим\Documents\programming\projects\document-searcher\src\target\release\deps\libbzip2-4620ab29c5706d19.rlib: C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\lib.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\mem.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\bufread.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\read.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\write.rs
+
+C:\Users\максим\Documents\programming\projects\document-searcher\src\target\release\deps\libbzip2-4620ab29c5706d19.rmeta: C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\lib.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\mem.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\bufread.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\read.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\write.rs
+
+C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\lib.rs:
+C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\mem.rs:
+C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\bufread.rs:
+C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\read.rs:
+C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bzip2-0.4.4\src\write.rs:

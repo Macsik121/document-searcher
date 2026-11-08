@@ -374,16 +374,126 @@ mod win32 {
 
 #[cfg(not(target_os = "windows"))]
 mod win32 {
+    use std::fs::OpenOptions;
     use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
 
-    pub fn pick_folder(_initial_dir: &Path) -> Option<PathBuf> {
+    #[cfg(unix)]
+    extern "C" {
+        fn dup2(oldfd: i32, newfd: i32) -> i32;
+    }
+
+    /// Redirects `stdout` to `/dev/null` so that the chatty `pdf-extract` crate
+    /// does not flood the embedded browser console. `tracing` logs still reach
+    /// `stderr`. Console `scan`/`search` commands finish before `run()` calls
+    /// this, so their output is preserved.
+    pub fn silence_stdout_spam() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            if let Ok(dev_null) = OpenOptions::new().write(true).open("/dev/null") {
+                unsafe {
+                    let _ = dup2(dev_null.as_raw_fd(), 1);
+                }
+            }
+        }
+    }
+
+    /// Tries each installed graphical folder dialog in turn (zenity → kdialog
+    /// → yad) and returns the first user selection. Returns `None` on cancel or
+    /// when no dialog helper is available (the UI's manual path field covers
+    /// that case).
+    pub fn pick_folder(initial_dir: &Path) -> Option<PathBuf> {
+        let start_dir = if initial_dir.is_dir() {
+            format!("{}/", initial_dir.display())
+        } else {
+            String::new()
+        };
+
+        // 1. zenity — standard on GNOME / MATE / Xfce / ALT Linux Workstation / Ubuntu.
+        let mut zenity_cmd = Command::new("zenity");
+        zenity_cmd.args([
+            "--file-selection",
+            "--directory",
+            "--title=Select a folder to search",
+        ]);
+        if !start_dir.is_empty() {
+            zenity_cmd.arg(format!("--filename={start_dir}"));
+        }
+        if let Ok(output) = zenity_cmd.stderr(Stdio::null()).output() {
+            if output.status.success() {
+                let selected = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                if !selected.is_empty() {
+                    return Some(PathBuf::from(selected));
+                }
+            }
+            return None;
+        }
+
+        // 2. kdialog — standard on KDE Plasma / ALT Linux KWorkstation / Kubuntu.
+        let mut kdialog_cmd = Command::new("kdialog");
+        kdialog_cmd.arg("--getexistingdirectory");
+        if initial_dir.is_dir() {
+            kdialog_cmd.arg(initial_dir);
+        } else {
+            kdialog_cmd.arg(".");
+        }
+        kdialog_cmd.args(["--title", "Select a folder to search"]);
+        if let Ok(output) = kdialog_cmd.stderr(Stdio::null()).output() {
+            if output.status.success() {
+                let selected = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                if !selected.is_empty() {
+                    return Some(PathBuf::from(selected));
+                }
+            }
+            return None;
+        }
+
+        // 3. yad — lightweight GTK dialog.
+        if let Ok(output) = Command::new("yad")
+            .args(["--file", "--directory", "--title=Select a folder to search"])
+            .stderr(Stdio::null())
+            .output()
+        {
+            if output.status.success() {
+                let selected = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                if !selected.is_empty() {
+                    return Some(PathBuf::from(selected));
+                }
+            }
+        }
+
         None
     }
 
+    /// Opens a document in the OS default application via `xdg-open`, falling
+    /// back to `gio open` (Nautilus-managed desktops).
     pub fn open_with_default_app(path: &Path) -> anyhow::Result<()> {
-        anyhow::bail!("Windows shell opener is unavailable for {}", path.display())
+        if Command::new("xdg-open")
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        if Command::new("gio")
+            .args(["open"])
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        anyhow::bail!("Could not open {} via xdg-open or gio open", path.display())
     }
-    pub fn silence_stdout_spam() {}
 }
 
 fn open_file(path: &Path) -> anyhow::Result<()> {
@@ -728,50 +838,97 @@ fn serialize_state_json(ui: &WinUiState) -> String {
 // ---------------------------------------------------------------------------
 
 fn find_app_browser() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    for env_key in ["ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"] {
-        if let Ok(base) = std::env::var(env_key) {
-            let base_path = PathBuf::from(base);
-            let mut edge = base_path.clone();
-            edge.push("Microsoft");
-            edge.push("Edge");
-            edge.push("Application");
-            edge.push("msedge.exe");
-            candidates.push(edge);
+    #[cfg(target_os = "windows")]
+    {
+        let mut candidates = Vec::new();
+        for env_key in ["ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"] {
+            if let Ok(base) = std::env::var(env_key) {
+                let base_path = PathBuf::from(base);
+                let mut edge = base_path.clone();
+                edge.push("Microsoft");
+                edge.push("Edge");
+                edge.push("Application");
+                edge.push("msedge.exe");
+                candidates.push(edge);
 
-            let mut chrome = base_path.clone();
-            chrome.push("Google");
-            chrome.push("Chrome");
-            chrome.push("Application");
-            chrome.push("chrome.exe");
-            candidates.push(chrome);
+                let mut chrome = base_path.clone();
+                chrome.push("Google");
+                chrome.push("Chrome");
+                chrome.push("Application");
+                chrome.push("chrome.exe");
+                candidates.push(chrome);
 
-            let mut yandex = base_path;
-            yandex.push("Yandex");
-            yandex.push("YandexBrowser");
-            yandex.push("Application");
-            yandex.push("browser.exe");
-            candidates.push(yandex);
+                let mut yandex = base_path;
+                yandex.push("Yandex");
+                yandex.push("YandexBrowser");
+                yandex.push("Application");
+                yandex.push("browser.exe");
+                candidates.push(yandex);
+            }
         }
+        candidates.into_iter().find(|path| path.is_file())
     }
-    candidates.into_iter().find(|path| path.is_file())
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let browsers = [
+            "chromium",
+            "chromium-browser",
+            "google-chrome",
+            "google-chrome-stable",
+            "yandex-browser",
+            "brave-browser",
+            "microsoft-edge",
+        ];
+        for name in browsers {
+            for prefix in ["/usr/bin", "/usr/local/bin", "/snap/bin"] {
+                let candidate = Path::new(prefix).join(name);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+        None
+    }
 }
 
 fn spawn_desktop_window(url: &str, profile_dir: &Path) -> Option<Child> {
     if let Some(browser) = find_app_browser() {
         let user_data_arg = format!("--user-data-dir={}", profile_dir.display());
         let app_arg = format!("--app={url}");
-        if let Ok(child) = Command::new(browser)
-            .args([
-                &app_arg,
-                "--window-size=1200,800",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-extensions",
-                &user_data_arg,
-            ])
-            .spawn()
+        let mut command = Command::new(browser);
+        command.args([
+            &app_arg,
+            "--window-size=1200,800",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-extensions",
+            &user_data_arg,
+        ]);
+
+        #[cfg(not(target_os = "windows"))]
         {
+            command
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+        }
+
+        if let Ok(child) = command.spawn() {
+            return Some(child);
+        }
+    }
+
+    // Firefox has no `--app` mode, so open the UI URL in a new window instead.
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut firefox = Command::new("firefox");
+        firefox
+            .args(["--new-window", url])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if let Ok(child) = firefox.spawn() {
             return Some(child);
         }
     }
@@ -1058,6 +1215,32 @@ fn handle_client(
             });
 
             write_http_response(&mut stream, "200 OK", "text/plain; charset=utf-8", b"ok");
+        }
+        ("POST", "/api/set-folder") => {
+            let candidate = PathBuf::from(req.body.trim());
+            if let Ok(canonical) = candidate.canonicalize() {
+                let clean = normalize_platform_path(&canonical);
+                if clean.is_dir() {
+                    persist_scan_path(&clean);
+                    if let Ok(mut guard) = controller.lock() {
+                        guard.start_folder_scan(clean);
+                    }
+                    write_http_response(&mut stream, "200 OK", "text/plain; charset=utf-8", b"ok");
+                    return;
+                }
+            }
+            if let Ok(mut guard) = controller.lock() {
+                guard.ui.set_error(format!(
+                    "Selected path is not a readable directory: {}",
+                    candidate.display()
+                ));
+            }
+            write_http_response(
+                &mut stream,
+                "400 Bad Request",
+                "text/plain; charset=utf-8",
+                b"invalid directory",
+            );
         }
         ("POST", "/api/shutdown") => {
             if let Ok(mut shutdown) = shutdown_requested_at.lock() {
@@ -1348,9 +1531,42 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     white-space: nowrap;
   }
   .sidebar-footer {
-    padding: 14px 20px;
+    padding: 12px 20px;
     border-top: 1px solid var(--border-color);
     background: var(--bg-sidebar);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .path-input-row {
+    display: flex;
+    gap: 6px;
+  }
+  .path-input {
+    flex: 1;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12.5px;
+    color: var(--text-primary);
+    outline: none;
+  }
+  .path-input:focus {
+    border-color: var(--accent);
+  }
+  .btn-secondary {
+    background: #e2e8f0;
+    color: #1e293b;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-secondary:hover {
+    background: #cbd5e1;
   }
   .btn-primary {
     background: var(--accent);
@@ -1562,6 +1778,17 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     <div class="section-caption">Files found in folder</div>
     <div id="filesList" class="files-scroll"></div>
     <div class="sidebar-footer">
+      <div class="path-input-row">
+        <input
+          id="manualPathInput"
+          class="path-input"
+          type="text"
+          placeholder="Paste folder path and press Go…"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button id="goPathBtn" class="btn-secondary" type="button">Go</button>
+      </div>
       <button id="changeFolderBtn" class="btn-primary" type="button">Change folder</button>
     </div>
   </aside>
@@ -1613,6 +1840,8 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   const fileCountLabel = document.getElementById("fileCountLabel");
   const filesList = document.getElementById("filesList");
   const changeFolderBtn = document.getElementById("changeFolderBtn");
+  const manualPathInput = document.getElementById("manualPathInput");
+  const goPathBtn = document.getElementById("goPathBtn");
   const searchInput = document.getElementById("searchInput");
   const spinner = document.getElementById("spinner");
   const statusIcon = document.getElementById("statusIcon");
@@ -1641,6 +1870,23 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
 
   changeFolderBtn.addEventListener("click", () => {
     postApi("/api/choose-folder", "");
+  });
+
+  function submitManualPath() {
+    const raw = (manualPathInput.value || "").trim();
+    if (!raw) {
+      return;
+    }
+    postApi("/api/set-folder", raw);
+    manualPathInput.value = "";
+  }
+
+  goPathBtn.addEventListener("click", submitManualPath);
+  manualPathInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submitManualPath();
+    }
   });
 
   searchInput.addEventListener("input", () => {

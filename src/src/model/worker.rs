@@ -245,8 +245,8 @@ impl Worker {
                 }
 
                 completed += 1;
-                if completed == total || completed % progress_step == 0 {
-                    if !send_search_event(
+                if (completed == total || completed.is_multiple_of(progress_step))
+                    && !send_search_event(
                         &events,
                         &child_cancel,
                         &current_generation,
@@ -254,10 +254,9 @@ impl Worker {
                         WorkerEvent::SearchProgress { completed, total },
                     )
                     .await
-                    {
-                        join_set.abort_all();
-                        return;
-                    }
+                {
+                    join_set.abort_all();
+                    return;
                 }
             }
 
