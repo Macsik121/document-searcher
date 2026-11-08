@@ -1,5 +1,0 @@
-error: can't find lib `document_searcher` at path `C:\Users\максим\Documents\programming\projects\document-searcher\src\lib.rs`
- --> C:\Users\максим\Documents\programming\projects\document-searcher\Cargo.toml
-error: can't find lib `document_searcher` at path `C:\Users\максим\Documents\programming\projects\document-searcher\src\lib.rs`
- --> C:\Users\максим\Documents\programming\projects\document-searcher\Cargo.toml
-error: could not compile due to 2 previous target resolution errors

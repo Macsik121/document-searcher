@@ -165,20 +165,67 @@ fn decode_text_bytes(bytes: &[u8]) -> String {
         }
     }
 
-    // Layer 2: strict UTF-8, guarded against BOM-less UTF-16.
-    if is_likely_strict_utf8(bytes) {
+    // Layer 2: strict UTF-8, but skip the attempt when the bytes look like
+    // BOM-less UTF-16 (a high NUL ratio), which would otherwise decode to a
+    // string full of `'\0'`.
+    if !looks_like_bomless_utf16(bytes) {
         if let Ok(text) = String::from_utf8(bytes.to_vec()) {
             return text;
         }
     }
 
-    // Layer 3: detect a legacy encoding and decode it.
-    let mut detector = chardetng::EncodingDetector::new();
-    detector.feed(bytes, true);
-    let encoding = detector.guess(None, true);
-    let mut output = String::with_capacity(bytes.len());
-    let (_text, _enc, _had_errors) = encoding.decode(bytes, &mut output);
-    output
+    // Layer 3: detect a legacy single-byte encoding and decode it.
+    let detected = {
+        let mut detector = chardetng::EncodingDetector::new();
+        detector.feed(bytes, true);
+        detector.guess(None, true)
+    };
+    let (cow, _enc, _had_errors) = detected.decode(bytes);
+    let decoded = cow.into_owned();
+
+    // Layer 4: UTF-16 rescue. `chardetng` can mis-detect short BOM-less
+    // UTF-16 samples as a single-byte encoding, leaving NULs in the output.
+    // If the detector's result is still NUL-heavy, try UTF-16 both ways and
+    // keep whichever yields fewer NULs than the detected decode.
+    if has_many_nuls(&decoded) {
+        let le = decode_utf16(bytes, true);
+        let be = decode_utf16(bytes, false);
+        let best = [le, be]
+            .into_iter()
+            .min_by_key(|s| nul_count(s))
+            .expect("non-empty iterator");
+        if nul_count(&best) < nul_count(&decoded) {
+            return best;
+        }
+    }
+
+    decoded
+}
+
+/// Count `'\0'` characters in a string.
+fn nul_count(s: &str) -> usize {
+    s.bytes().filter(|&b| b == 0).count()
+}
+
+/// True when more than ~5% of sampled bytes are NUL — the signature of
+/// BOM-less UTF-16 of mostly-ASCII text (every other byte is `0x00`).
+fn looks_like_bomless_utf16(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+    const SAMPLE: usize = 4096;
+    let take = bytes.len().min(SAMPLE);
+    let nuls = bytes[..take].iter().filter(|&&b| b == 0).count();
+    nuls * 20 > take
+}
+
+/// True when more than ~5% of a *decoded* string's bytes are NUL — used to
+/// decide whether the detector's output is suspect and worth a UTF-16 retry.
+fn has_many_nuls(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    nul_count(s) * 20 > s.len()
 }
 
 /// Decode UTF-16 bytes (BOM already stripped) into a `String`, replacing
@@ -200,43 +247,6 @@ fn decode_utf16(bytes: &[u8], little_endian: bool) -> String {
         units.push(u16::from(bytes[i]));
     }
     String::from_utf16_lossy(&units)
-}
-
-/// Heuristic gate for the UTF-8 fast-path.
-///
-/// Returns `true` when the bytes are plausibly UTF-8 (or pure ASCII): no
-/// embedded NULs beyond a tiny ratio, and no obviously valid strict-UTF-8
-/// prefix that is actually BOM-less UTF-16. BOM-less UTF-16 text decodes
-/// under UTF-8 as a long run of `'\0'` characters (e.g. `"H\0e\0l\0l\0o\0"`),
-/// so a high NUL ratio signals "skip UTF-8, go to the detector."
-fn is_likely_strict_utf8(bytes: &[u8]) -> bool {
-    if bytes.is_empty() {
-        return true;
-    }
-    // A cheap pre-filter: only run the full validation if the bytes look
-    // ASCII-shaped or contain continuation bytes that UTF-8 expects.
-    let mut nul_count = 0usize;
-    let mut high_count = 0usize;
-    const SAMPLE: usize = 4096;
-    let take = bytes.len().min(SAMPLE);
-    for &b in &bytes[..take] {
-        if b == 0 {
-            nul_count += 1;
-        } else if b >= 0x80 {
-            high_count += 1;
-        }
-    }
-    // BOM-less UTF-16 of ASCII text is ~50% NULs; real UTF-8 text has none.
-    if nul_count * 20 > take {
-        return false;
-    }
-    // Pure ASCII: always valid UTF-8.
-    if high_count == 0 {
-        return true;
-    }
-    // Mixed bytes: validate honestly. `from_utf8` on the whole slice below
-    // does the real check; this gate only decides whether to *try* it.
-    true
 }
 
 fn extract_docx_text(path: &Path) -> Result<String> {
