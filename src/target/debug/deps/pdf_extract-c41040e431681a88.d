@@ -1,9 +1,0 @@
-C:\Users\максим\Documents\programming\projects\document-searcher\src\target\debug\deps\pdf_extract-c41040e431681a88.d: C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\lib.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\core_fonts.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\glyphnames.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\zapfglyphnames.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\encodings.rs
-
-C:\Users\максим\Documents\programming\projects\document-searcher\src\target\debug\deps\libpdf_extract-c41040e431681a88.rmeta: C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\lib.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\core_fonts.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\glyphnames.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\zapfglyphnames.rs C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\encodings.rs
-
-C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\lib.rs:
-C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\core_fonts.rs:
-C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\glyphnames.rs:
-C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\zapfglyphnames.rs:
-C:\Users\максим\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\pdf-extract-0.7.12\src\encodings.rs:
