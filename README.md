@@ -1,96 +1,376 @@
-# Document Searcher
+\# Document Searcher
 
-Document Searcher is a Rust document-search application for ALT Linux. The
-feature-free core and CLI can be exercised on Windows; the GTK/Libadwaita UI,
-portals, GSettings runtime, OCR, and Flatpak are Linux-only and must be
-validated in the ALT Linux VM.
 
-## Windows core workflow
 
-The default feature set is intentionally empty. From the repository root, use
-only `--no-default-features` on Windows:
+\*\*Document Searcher\*\* — высокопроизводительное настольное (GUI) и консольное (CLI) приложение на языке Rust для глубокого контекстного поиска текста внутри локальных документов \*\*`.docx`\*\* и \*\*`.pdf`\*\* на платформах \*\*Windows 10/11\*\*, \*\*ALT Linux\*\* и \*\*Ubuntu\*\*.
+
+
+
+\---
+
+
+
+\## Основные возможности
+
+
+
+\* \*\*Фокус на документах `.docx` и `.pdf`:\*\*
+
+&#x20; \* По умолчанию сканер индексирует только файлы `.docx` и `.pdf` (регистронезависимо), игнорируя исходный код, временные и скрытые файлы (начинающиеся с `.`), символические ссылки и файлы размером более \*\*50 MiB\*\*.
+
+&#x20; \* При необходимости список форматов можно расширить через параметр `--ext` (например, `--ext docx,pdf,txt,md`).
+
+\* \*\*Трёхуровневый конвейер извлечения текста из PDF (`3-Tier PDF Extractor`):\*\*
+
+&#x20; 1. \*\*Постраничный декодер `lopdf` с поддержкой кириллицы:\*\* напрямую разбирает шрифтовые таблицы `/Differences` (глифы `/uni0410`..`/uni044F`, `/afii10017`..`/afii10097`, `.cap`), карты символов `/ToUnicode` (`bfchar` / `bfrange`), `UTF-16BE` и кодировку `CP1251`.
+
+&#x20; 2. \*\*Изолированный парсер `pdf-extract`:\*\* выполняется внутри защитного контура `std::panic::catch\_unwind`, благодаря чему сложные или повреждённые PDF-файлы никогда не прерывают общий поиск.
+
+&#x20; 3. \*\*Интеллектуальный OCR-фоллбэк для сканов:\*\* если PDF не содержит текстового слоя, автоматически запускается распознавание через `pdftoppm` + `tesseract` (`eng+rus` с откатом на `eng`), а на Windows 10/11 при отсутствии внешних утилит используется встроенный системный движок \*\*Windows WinRT (`Windows.Data.Pdf` + `Windows.Media.Ocr`)\*\*.
+
+\* \*\*Мгновенный повторный поиск (`In-Memory TEXT\_CACHE`):\*\*
+
+&#x20; \* Извлечённый текст каждого файла кэшируется в оперативной памяти по ключу `(путь, размер, время модификации)`. Повторные поисковые запросы по проиндексированной папке выполняются за миллисекунды без повторного чтения диска.
+
+\* \*\*Многопоточность на всех ядрах CPU:\*\*
+
+&#x20; \* Извлечение текста и поиск выполняются параллельно в пуле `tokio::task::JoinSet`, ограниченном семафором по числу ядер процессора (`available\_parallelism`, от 2 до 8 потоков).
+
+&#x20; \* Защита от «keystroke bomb»: задержка ввода (\*\*debounce 300 мс\*\*), мгновенная отмена устаревшего поиска через `CancellationToken` и строгая сериализация команд через монитор `Controller`.
+
+\* \*\*Unicode-поиск с контекстом (±20 символов):\*\*
+
+&#x20; \* Регистронезависимый поиск с сохранением точных байтовых границ символов UTF-8.
+
+&#x20; \* Для каждого совпадения формируется сниппет: \*\*до 20 символов до\*\* + \*\*точная найденная подстрока (выделяется маркером)\*\* + \*\*до 20 символов после\*\*.
+
+\* \*\*Два режима работы в одном исполняемом файле (GUI + CLI):\*\*
+
+&#x20; \* \*\*Графический интерфейс (GUI):\*\* разделение экрана 50/50, список найденных файлов слева, строка поиска с индикацией прогресса (спиннер / галочка успеха / ошибка), карточки результатов с подсветкой совпадений, кумулятивная пагинация по \*\*100 результатов\*\* (`Show more`), выбор папки через системный диалог и открытие документов по клику в программе по умолчанию.
+
+&#x20; \* \*\*Консольный интерфейс (CLI):\*\* быстрые команды `scan` и `search` для работы в терминале и скриптах.
+
+
+
+\---
+
+
+
+\## Быстрый старт и развёртывание (Windows 10/11)
+
+
+
+\### 1. Предварительные требования
+
+\* Установленный тулчейн \*\*Rust\*\* (`rustup`, версия `1.78.0` закреплена в `rust-toolchain.toml`).
+
+\* Никаких дополнительных C/C++ библиотек на Windows устанавливать не требуется.
+
+
+
+\### 2. Настройка корневого Workspace (выполняется один раз)
+
+Если вы запускаете команды из корня репозитория (над папкой `src`), убедитесь, что в корне лежит файл `Cargo.toml` со следующим содержимым:
+
+
+
+```toml
+
+\[workspace]
+
+members = \["src"]
+
+default-members = \["src"]
+
+resolver = "2"
+
+```
+
+
+
+\### 3. Глобальная установка для запуска из любой папки
+
+Выполните в PowerShell из корня репозитория:
+
+
 
 ```powershell
-cargo fmt --check --manifest-path .\src\Cargo.toml
-cargo test --manifest-path .\src\Cargo.toml --lib --no-default-features
-cargo clippy --manifest-path .\src\Cargo.toml --lib --tests --no-default-features -- -D warnings
-cargo run --manifest-path .\src\Cargo.toml --no-default-features -- scan <directory>
-cargo run --manifest-path .\src\Cargo.toml --no-default-features -- search <directory> <query>
+
+cargo install --path .\\src --features windows-desktop --force
+
 ```
 
-The CLI scans supported files, reports skipped oversized/unreadable entries,
-and searches extracted text with Unicode-aware case-insensitive matching and up
-to 20 characters of context on each side. The core includes text, DOCX, and
-PDF text-layer extraction. Image and scanned-PDF OCR requires the Linux `ocr`
-/ `desktop` build, Tesseract, Leptonica, `pdftoppm`, and matching tessdata.
 
-Do not run the `desktop` feature, native GUI smoke tests, OCR integration, or
-Flatpak commands on Windows. A successful core check does not verify GTK,
-portal, GSettings, OCR, or Flatpak behavior.
 
-## Linux / ALT Linux workflow
+Эта команда скомпилирует релизный бинарник `document-searcher.exe` и установит его в `%USERPROFILE%\\.cargo\\bin`, после чего приложение можно вызывать из \*\*любой\*\* директории на компьютере.
 
-The Linux desktop build requires GTK4, Libadwaita, GLib development tools,
-Tesseract/Leptonica, `pdftoppm`, pkg-config, and the ashpd portal runtime.
-Blueprint Compiler is not required: the UI is built procedurally in
-`src/src/app.rs`. During a Linux desktop build, `build.rs` automatically runs
-`glib-compile-resources` for `data/resources/gresource.xml` and
-`glib-compile-schemas` for the GSettings schema. The CSS resource is embedded
-in the binary, so no `.gresource` installation step is needed.
 
-From `src/` in the ALT Linux VM:
 
-```sh
+\### 4. Сборка и запуск через Cargo (без глобальной установки)
+
+
+
+```powershell
+
+\# Сборка релизной версии
+
+cargo build --release --features windows-desktop
+
+
+
+\# Запуск графического интерфейса (GUI)
+
+cargo run --release --features windows-desktop
+
+
+
+\# Запуск GUI сразу для конкретной папки
+
+cargo run --release --features windows-desktop -- "C:\\Users\\Имя\\Documents\\Отчёты"
+
+
+
+\# Запуск консольного сканирования и поиска (CLI)
+
+cargo run --no-default-features -- scan "C:\\Users\\Имя\\Documents\\Отчёты"
+
+cargo run --no-default-features -- search "C:\\Users\\Имя\\Documents\\Отчёты" "искомая строка"
+
+```
+
+
+
+\---
+
+
+
+\## Использование установленного приложения
+
+
+
+После выполнения `cargo install` откройте терминал в любой нужной папке с документами:
+
+
+
+```powershell
+
+\# 1. Открыть графическое окно поиска для текущей папки
+
+document-searcher .
+
+
+
+\# 2. Открыть графическое окно поиска для указанной папки
+
+document-searcher "D:\\Документы\\Договоры"
+
+
+
+\# 3. Открыть графическое окно с последней сохранённой папкой
+
+document-searcher
+
+
+
+\# 4. Просканировать папку в консоли (по умолчанию только .docx и .pdf)
+
+document-searcher scan .
+
+
+
+\# 5. Найти подстроку во всех .docx и .pdf файлах папки в консоли
+
+document-searcher search . "финансовый отчёт"
+
+
+
+\# 6. Запустить поиск с пользовательским списком расширений (--ext)
+
+document-searcher search . "config" --ext docx,pdf,txt,md
+
+```
+
+
+
+\---
+
+
+
+\## Развёртывание на ALT Linux и Ubuntu
+
+
+
+\### 1. Установка системных зависимостей (для OCR и системных диалогов)
+
+
+
+\* \*\*На ALT Linux (`apt-rpm`):\*\*
+
+&#x20; ```bash
+
+&#x20; sudo apt-get update
+
+&#x20; sudo apt-get install -y gcc make pkgconfig tesseract tesseract-langpack-ru tesseract-langpack-en poppler-tools zenity xdg-utils
+
+&#x20; ```
+
+\* \*\*На Ubuntu / Debian (`apt`):\*\*
+
+&#x20; ```bash
+
+&#x20; sudo apt update
+
+&#x20; sudo apt install -y build-essential pkg-config tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng poppler-utils zenity xdg-utils
+
+&#x20; ```
+
+
+
+\### 2. Установка Rust (если не установлен)
+
+```bash
+
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+source "$HOME/.cargo/env"
+
+```
+
+
+
+\### 3. Сборка и установка приложения
+
+```bash
+
+\# Сборка и глобальная установка в \~/.cargo/bin
+
+cargo install --path ./src --force
+
+
+
+\# Запуск в текущей директории
+
+document-searcher .
+
+```
+
+
+
+\*(Примечание: для сборки классического варианта на базе нативных библиотек GTK4 / Libadwaita и упаковки во Flatpak на ALT Linux см. инструкции в \[`docs/ALT-LINUX-RUN.md`](docs/ALT-LINUX-RUN.md) и \[`src/BUILD\_INSTRUCTIONS.md`](src/BUILD\_INSTRUCTIONS.md)).\*
+
+
+
+\---
+
+
+
+\## Проверка качества кода и тестирование
+
+
+
+Перед коммитом или релизом выполните стандартный набор проверок из корня репозитория (или из папки `src/`):
+
+
+
+```powershell
+
+\# 1. Проверка форматирования кода
+
 cargo fmt --check
+
+
+
+\# 2. Запуск unit-тестов ядра (scanner, extractor, search, worker, state)
+
 cargo test --lib --no-default-features
+
+
+
+\# 3. Запуск unit-тестов десктопного контроллера и сериализации
+
+cargo test --bins --features windows-desktop
+
+
+
+\# 4. Статический анализ Clippy (без единого предупреждения)
+
 cargo clippy --lib --tests --no-default-features -- -D warnings
-cargo build --release --features desktop
-cargo run --release --features desktop
+
+cargo clippy --all-targets --features windows-desktop -- -D warnings
+
 ```
 
-The native desktop checks must cover startup, embedded CSS, default
-`/home/documents`, GSettings `scan-path` persistence, portal folder selection,
-scan/search, pagination, cancellation, and GIO file opening. Record them
-separately from Windows core validation.
 
-## Flatpak workflow (ALT Linux VM only)
 
-The sole manifest is
-[`src/flatpak/org.gtk.DocumentSearcher.json`](src/flatpak/org.gtk.DocumentSearcher.json).
-After the lockfile is stable, generate its offline Cargo sources in the Linux
-VM; do not create or claim this generated file on Windows:
+\---
 
-```sh
-cd src
-cargo flatpak-generator --output flatpak/generated-sources.json
-flatpak-builder --force-clean --install-deps-from=flathub \
-  flatpak/build-dir flatpak/org.gtk.DocumentSearcher.json
-flatpak-builder --force-clean --user --install \
-  flatpak/build-dir flatpak/org.gtk.DocumentSearcher.json
-flatpak run org.gtk.DocumentSearcher
+
+
+\## Структура проекта и документация
+
+
+
+```text
+
+document-searcher/
+
+├── Cargo.toml                         # Корневой Cargo Workspace
+
+├── README.md                          # Основное руководство по проекту
+
+├── docs/
+
+│   ├── UNIFIED-ARCHITECTURE-SPEC.md   # Единая спецификация v2.0 (SRS + BPMN + UML + ERD)
+
+│   ├── ALT-LINUX-RUN.md               # Руководство по запуску в ALT Linux VM
+
+│   ├── architecture/                  # Диаграммы компонентов и потоков
+
+│   └── specs/                         # Исходные требования к проекту
+
+└── src/
+
+&#x20;   ├── Cargo.toml                     # Манифест пакета document-searcher
+
+&#x20;   ├── rust-toolchain.toml            # Закреплённая версия компилятора (1.78.0)
+
+&#x20;   ├── build.rs                       # Скрипт сборки
+
+&#x20;   ├── BUILD\_INSTRUCTIONS.md          # Подробные инструкции по сборке
+
+&#x20;   └── src/
+
+&#x20;       ├── lib.rs                     # Библиотечная точка входа ядра
+
+&#x20;       ├── main.rs                    # Универсальная точка входа (GUI + CLI)
+
+&#x20;       ├── app\_win.rs                 # Десктопный контроллер, HTTP-пул и встроенный UI
+
+&#x20;       ├── app.rs                     # Опциональный GTK4/Libadwaita адаптер для Linux
+
+&#x20;       └── model/
+
+&#x20;           ├── actions.rs             # Протокол команд и событий (WorkerCommand / WorkerEvent)
+
+&#x20;           ├── state.rs               # Состояние приложения (AppState) и пагинация
+
+&#x20;           ├── scanner.rs             # Сканер директорий (.docx, .pdf, лимит 50 MiB)
+
+&#x20;           ├── extractor.rs           # 3-уровневый экстрактор (lopdf + docx + OCR + TEXT\_CACHE)
+
+&#x20;           ├── search.rs              # Регистронезависимый Unicode-поиск с контекстом ±20 симв.
+
+&#x20;           └── worker.rs              # Многопоточный Tokio-воркер (Debounce 300ms, JoinSet)
+
 ```
 
-The manifest installs desktop metadata and the GSettings schema. The
-GResource is embedded in the binary and is not copied separately. Verify the
-portal permissions, schema lookup, CSS lookup, OCR runtime, and file opening
-inside the Flatpak before treating packaging as complete.
 
-The extractor default historically uses `eng+rus`, while the current manifest
-sets `DOCUMENT_SEARCHER_OCR_LANG=eng` and supplies English tessdata. This
-mismatch is documented and must be resolved only after a Linux OCR check.
 
-## Specifications and architecture
+\* \*\*\[Единая спецификация и архитектура (BPMN, UML, ERD)](docs/UNIFIED-ARCHITECTURE-SPEC.md)\*\*
 
-- [Specifications](docs/specs/)
-- [Architecture documentation](docs/architecture/)
-- [ALT Linux run guide](docs/ALT-LINUX-RUN.md)
-- [Build instructions](src/BUILD_INSTRUCTIONS.md)
+\* \*\*\[Исходные требования](docs/specs/requirements-spec.md)\*\*
 
-`docs/specs/requirements-spec.md` is the user-owned requirements source and is
-not rewritten by implementation work.
+\* \*\*\[Запуск на ALT Linux](docs/ALT-LINUX-RUN.md)\*\*
 
-## Current status
 
-The scanner, extractors, Unicode-aware matcher, Tokio worker, and CLI are
-available for core checks. Desktop integration is implemented in the current
-source path but remains unverified until the ALT Linux VM checks are run.
+
