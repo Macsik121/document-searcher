@@ -9,6 +9,7 @@ path = "src/lib.rs"
 [features]
 default = []
 ocr = ["dep:leptess"]
+windows-ocr = []
 desktop = [
     "ocr",
     "dep:libadwaita",
@@ -18,6 +19,7 @@ desktop = [
     "dep:ashpd",
     "dep:url",
 ]
+windows-desktop = ["windows-ocr"]
 
 [dependencies]
 # UI and desktop integration are optional so the search core can be tested on Windows.
@@ -35,7 +37,9 @@ tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "fs", "sync
 tokio-util = "0.7"
 
 # Document processing
+# Document processing
 anyhow = "1.0"
+lopdf = "0.31"
 pdf-extract = "0.7"
 quick-xml = "0.31"
 walkdir = "2.4"

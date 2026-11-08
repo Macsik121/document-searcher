@@ -24,6 +24,16 @@
   margin: 2px 0;
 }
 
+.search-match {
+  font-weight: bold;
+  background-color: rgba(250, 204, 21, 0.45);
+  border-radius: 3px;
+}
+
+.search-status-idle {
+  color: @foreground_color;
+}
+
 .search-status-success {
   color: @success_color;
   font-weight: bold;
@@ -31,6 +41,11 @@
 
 .search-status-searching {
   color: @accent_color;
+}
+
+.search-status-error {
+  color: @error_color;
+  font-weight: bold;
 }
 
 .sidebar-header {

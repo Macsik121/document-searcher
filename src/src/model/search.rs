@@ -26,6 +26,7 @@ impl FoldedText {
         }
     }
 }
+
 pub fn search_files(files: &[FileEntry], query: &str) -> anyhow::Result<Vec<SearchMatch>> {
     if query.trim().is_empty() {
         return Ok(Vec::new());

@@ -1,0 +1,4 @@
+    Blocking waiting for file lock on package cache
+    Checking crossbeam-deque v0.8.8
+    Checking async-channel v2.5.0
+    Checking rayon-core v1.13.0

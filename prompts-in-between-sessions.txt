@@ -101,3 +101,167 @@ utils.rs и window.blp удалены, документация синхрони
 ###########################
 ######## Prompt 3 #########
 ###########################
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+{
+    "dns": {
+        "independent_cache": true,
+        "rules": [
+            {
+                "outbound": "any",
+                "server": "dns-direct"
+            },
+            {
+                "query_type": [
+                    32,
+                    33
+                ],
+                "server": "dns-block"
+            },
+            {
+                "domain_suffix": ".lan",
+                "server": "dns-block"
+            }
+        ],
+        "servers": [
+            {
+                "address": "https://cloudflare-dns.com/dns-query",
+                "address_resolver": "dns-local",
+                "detour": "proxy",
+                "strategy": "",
+                "tag": "dns-remote"
+            },
+            {
+                "address": "https://cloudflare-dns.com/dns-query",
+                "address_resolver": "dns-local",
+                "detour": "direct",
+                "strategy": "",
+                "tag": "dns-direct"
+            },
+            {
+                "address": "rcode://success",
+                "tag": "dns-block"
+            },
+            {
+                "address": "local",
+                "detour": "direct",
+                "tag": "dns-local"
+            }
+        ]
+    },
+    "inbounds": [
+        {
+            "domain_strategy": "",
+            "listen": "127.0.0.1",
+            "listen_port": 2080,
+            "sniff": true,
+            "sniff_override_destination": false,
+            "tag": "mixed-in",
+            "type": "mixed"
+        },
+        {
+            "auto_route": true,
+            "domain_strategy": "",
+            "endpoint_independent_nat": true,
+            "inet4_address": "172.19.0.1/28",
+            "interface_name": "neko-tun",
+            "mtu": 9000,
+            "sniff": true,
+            "sniff_override_destination": false,
+            "stack": "gvisor",
+            "strict_route": false,
+            "tag": "tun-in",
+            "type": "tun"
+        }
+    ],
+    "log": {
+        "level": "info"
+    },
+    "outbounds": [
+        {
+            "domain_strategy": "",
+            "flow": "xtls-rprx-vision",
+            "packet_encoding": "",
+            "server": "66.90.92.53",
+            "server_port": 443,
+            "tag": "proxy",
+            "tls": {
+                "enabled": true,
+                "reality": {
+                    "enabled": true,
+                    "public_key": "10rVZPoOUP1TlQviIAsQ_jAROX0fRQxH0C92nq_zGQc",
+                    "short_id": "43dcff53849b81e6"
+                },
+                "server_name": "8a11e6a89110.j.cloudfront.hls.ttvnw.net",
+                "utls": {
+                    "enabled": true,
+                    "fingerprint": "edge"
+                }
+            },
+            "type": "vless",
+            "uuid": "d415c24a-5fc3-00be-9d42-4fbc60d18cb4"
+        },
+        {
+            "tag": "direct",
+            "type": "direct"
+        },
+        {
+            "tag": "bypass",
+            "type": "direct"
+        },
+        {
+            "tag": "block",
+            "type": "block"
+        },
+        {
+            "tag": "dns-out",
+            "type": "dns"
+        }
+    ],
+    "route": {
+        "final": "proxy",
+        "rules": [
+            {
+                "outbound": "dns-out",
+                "protocol": "dns"
+            },
+            {
+                "network": "udp",
+                "outbound": "block",
+                "port": [
+                    135,
+                    137,
+                    138,
+                    139,
+                    5353
+                ]
+            },
+            {
+                "ip_cidr": [
+                    "224.0.0.0/3",
+                    "ff00::/8"
+                ],
+                "outbound": "block"
+            },
+            {
+                "outbound": "block",
+                "source_ip_cidr": [
+                    "224.0.0.0/3",
+                    "ff00::/8"
+                ]
+            }
+        ]
+    }
+}

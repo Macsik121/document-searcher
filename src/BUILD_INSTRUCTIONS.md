@@ -1,5 +1,21 @@
 # Document Searcher build and test instructions
 
+## Windows: full app
+
+# 1. Форматирование
+cargo fmt --check --manifest-path .\src\Cargo.toml
+
+# 2. Тесты и Clippy для базового Core/CLI (--no-default-features)
+cargo test --manifest-path .\src\Cargo.toml --lib --no-default-features
+cargo clippy --manifest-path .\src\Cargo.toml --lib --tests --no-default-features -- -D warnings
+
+# 3. Тесты и Clippy для Windows Desktop (--features windows-desktop)
+cargo test --manifest-path .\src\Cargo.toml --bins --features windows-desktop
+cargo clippy --manifest-path .\src\Cargo.toml --all-targets --features windows-desktop -- -D warnings
+
+# 4. Запуск графического приложения на Windows
+cargo run --manifest-path .\src\Cargo.toml --features windows-desktop
+
 ## Windows: core only
 
 Windows checks must use `--no-default-features`; do not enable `desktop` or

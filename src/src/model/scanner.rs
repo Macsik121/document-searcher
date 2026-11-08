@@ -6,10 +6,8 @@ use crate::model::state::FileEntry;
 
 pub const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
 
-const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "txt", "md", "rs", "toml", "json", "xml", "html", "css", "js", "ts", "pdf", "docx", "png",
-    "jpg", "jpeg", "tiff", "bmp",
-];
+/// По умолчанию сканер ищет только файлы .docx и .pdf.
+pub const DEFAULT_EXTENSIONS: &[&str] = &["docx", "pdf"];
 
 #[derive(Debug, Default)]
 pub struct ScanReport {
@@ -18,14 +16,19 @@ pub struct ScanReport {
     pub unreadable_entries: usize,
 }
 
-pub fn is_supported_extension(path: &Path) -> bool {
+pub fn is_allowed_extension<S: AsRef<str>>(path: &Path, allowed_extensions: &[S]) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
-            SUPPORTED_EXTENSIONS
-                .iter()
-                .any(|supported| extension.eq_ignore_ascii_case(supported))
+            allowed_extensions.iter().any(|supported| {
+                let clean = supported.as_ref().trim().trim_start_matches('.');
+                !clean.is_empty() && extension.eq_ignore_ascii_case(clean)
+            })
         })
+}
+
+pub fn is_supported_extension(path: &Path) -> bool {
+    is_allowed_extension(path, DEFAULT_EXTENSIONS)
 }
 
 fn is_visible_entry(entry: &DirEntry) -> bool {
@@ -41,6 +44,23 @@ pub fn scan_directory(root_path: &Path) -> anyhow::Result<Vec<FileEntry>> {
 }
 
 pub fn scan_directory_with_report(root_path: &Path) -> anyhow::Result<ScanReport> {
+    if let Ok(custom_ext) = std::env::var("DOCUMENT_SEARCHER_EXTENSIONS") {
+        let parsed: Vec<String> = custom_ext
+            .split(',')
+            .map(|item| item.trim().trim_start_matches('.').to_owned())
+            .filter(|item| !item.is_empty())
+            .collect();
+        if !parsed.is_empty() {
+            return scan_directory_with_extensions(root_path, &parsed);
+        }
+    }
+    scan_directory_with_extensions(root_path, DEFAULT_EXTENSIONS)
+}
+
+pub fn scan_directory_with_extensions<S: AsRef<str>>(
+    root_path: &Path,
+    allowed_extensions: &[S],
+) -> anyhow::Result<ScanReport> {
     if !root_path.is_dir() {
         anyhow::bail!(
             "Selected path is not a readable directory: {}",
@@ -65,7 +85,7 @@ pub fn scan_directory_with_report(root_path: &Path) -> anyhow::Result<ScanReport
             }
         };
 
-        if !entry.file_type().is_file() || !is_supported_extension(entry.path()) {
+        if !entry.file_type().is_file() || !is_allowed_extension(entry.path(), allowed_extensions) {
             continue;
         }
 
@@ -109,9 +129,11 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn supports_specified_extensions_case_insensitively() {
+    fn supports_only_docx_and_pdf_case_insensitively_by_default() {
         assert!(is_supported_extension(Path::new("report.PDF")));
-        assert!(is_supported_extension(Path::new("src/main.RS")));
+        assert!(is_supported_extension(Path::new("docs/contract.DOCX")));
+        assert!(!is_supported_extension(Path::new("src/main.rs")));
+        assert!(!is_supported_extension(Path::new("notes.txt")));
         assert!(!is_supported_extension(Path::new("report.odt")));
     }
 
@@ -120,10 +142,10 @@ mod tests {
         let root = tempdir().unwrap();
         fs::create_dir(root.path().join("b")).unwrap();
         fs::create_dir(root.path().join(".private")).unwrap();
-        fs::write(root.path().join("z.txt"), "z").unwrap();
-        fs::write(root.path().join("b/a.md"), "a").unwrap();
-        fs::write(root.path().join(".private/hidden.txt"), "hidden").unwrap();
-        fs::write(root.path().join("ignored.odt"), "ignored").unwrap();
+        fs::write(root.path().join("z.pdf"), "z").unwrap();
+        fs::write(root.path().join("b/a.docx"), "a").unwrap();
+        fs::write(root.path().join(".private/hidden.pdf"), "hidden").unwrap();
+        fs::write(root.path().join("ignored.txt"), "ignored").unwrap();
 
         let report = scan_directory_with_report(root.path()).unwrap();
         let paths: Vec<_> = report
@@ -131,13 +153,13 @@ mod tests {
             .iter()
             .map(|file| file.relative_path.as_str())
             .collect();
-        assert_eq!(paths, ["b/a.md", "z.txt"]);
+        assert_eq!(paths, ["b/a.docx", "z.pdf"]);
     }
 
     #[test]
     fn skips_files_over_the_size_limit() {
         let root = tempdir().unwrap();
-        let path = root.path().join("large.txt");
+        let path = root.path().join("large.pdf");
         let file = fs::File::create(&path).unwrap();
         file.set_len(MAX_FILE_SIZE + 1).unwrap();
 
@@ -153,7 +175,7 @@ mod tests {
 
         let root = tempdir().unwrap();
         let outside = tempdir().unwrap();
-        fs::write(outside.path().join("outside.txt"), "outside").unwrap();
+        fs::write(outside.path().join("outside.pdf"), "outside").unwrap();
         symlink(outside.path(), root.path().join("linked")).unwrap();
 
         let report = scan_directory_with_report(root.path()).unwrap();

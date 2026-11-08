@@ -21,10 +21,6 @@ use crate::model::worker::Worker;
 
 pub const APPLICATION_ID: &str = "org.gtk.DocumentSearcher";
 
-// ---------------------------------------------------------------------------
-// Worker bridge: dedicated Tokio runtime on its own thread.
-// ---------------------------------------------------------------------------
-
 struct RuntimeBridge {
     commands: mpsc::Sender<WorkerCommand>,
     runtime_thread: Option<thread::JoinHandle<()>>,
@@ -84,8 +80,6 @@ impl Drop for RuntimeBridge {
     fn drop(&mut self) {
         let commands = self.commands.clone();
         if let Some(runtime_thread) = self.runtime_thread.take() {
-            // Sending Shutdown may wait for capacity in the bounded queue. Do the
-            // send and join off the GTK thread so closing the window stays responsive.
             thread::spawn(move || {
                 if let Err(error) = commands.blocking_send(WorkerCommand::Shutdown) {
                     tracing::warn!(%error, "Worker command queue closed during shutdown");
@@ -98,14 +92,31 @@ impl Drop for RuntimeBridge {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Settings (GSettings is optional in dev environments without the schema).
-// ---------------------------------------------------------------------------
-
 fn load_settings() -> Option<gio::Settings> {
-    let source = gio::SettingsSchemaSource::default()?;
-    let schema = source.lookup(APPLICATION_ID, false)?;
-    Some(gio::Settings::new_full(&schema, None, None))
+    let default_source = gio::SettingsSchemaSource::default()?;
+    if let Some(schema) = default_source.lookup(APPLICATION_ID, true) {
+        return Some(gio::Settings::new_full(
+            &schema,
+            None::<&gio::SettingsBackend>,
+            None,
+        ));
+    }
+
+    if let Some(schema_dir) = option_env!("DOCUMENT_SEARCHER_SCHEMA_DIR") {
+        if Path::new(schema_dir).is_dir() {
+            let custom_source =
+                gio::SettingsSchemaSource::from_directory(schema_dir, Some(&default_source), false)
+                    .ok()?;
+            let schema = custom_source.lookup(APPLICATION_ID, true)?;
+            return Some(gio::Settings::new_full(
+                &schema,
+                None::<&gio::SettingsBackend>,
+                None,
+            ));
+        }
+    }
+
+    None
 }
 
 fn load_css() {
@@ -132,10 +143,6 @@ fn load_css() {
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 }
-
-// ---------------------------------------------------------------------------
-// UI state holder. All mutation happens on the GLib main loop only.
-// ---------------------------------------------------------------------------
 
 struct Ui {
     state: AppState,
@@ -290,7 +297,7 @@ impl Ui {
 
     fn search_completed(&mut self, query: String, results: Vec<SearchMatch>) {
         if self.state.search_query != query {
-            return; // Stale completion for a superseded query.
+            return;
         }
         self.state.search_results = results;
         self.state.results_offset = 0;
@@ -314,10 +321,6 @@ impl Ui {
         self.render_results();
     }
 }
-
-// ---------------------------------------------------------------------------
-// Row widgets. Activation uses PathBuf identity, never list indices.
-// ---------------------------------------------------------------------------
 
 fn file_row(file: &FileEntry) -> gtk::ListBoxRow {
     let row = gtk::ListBoxRow::new();
@@ -384,16 +387,12 @@ fn append_snippet_part(container: &gtk::Box, text: &str, matched: bool) {
     container.append(&label);
 }
 
-fn open_file(path: &PathBuf) -> anyhow::Result<()> {
+fn open_file(path: &Path) -> anyhow::Result<()> {
     let uri = gio::File::for_path(path).uri();
     gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>)
         .map_err(anyhow::Error::from)
         .map_err(|error| error.context(format!("Could not open {}", path.display())))
 }
-
-// ---------------------------------------------------------------------------
-// Folder selection via the xdg-desktop-portal FileChooser.
-// ---------------------------------------------------------------------------
 
 fn choose_folder(parent: &adw::ApplicationWindow, ui: Rc<RefCell<Ui>>, bridge: Rc<RuntimeBridge>) {
     let identifier = ashpd::WindowIdentifier::from_native(parent);
@@ -451,10 +450,6 @@ fn choose_folder(parent: &adw::ApplicationWindow, ui: Rc<RefCell<Ui>>, bridge: R
         bridge.send(WorkerCommand::Scan { root: path });
     });
 }
-
-// ---------------------------------------------------------------------------
-// Window construction.
-// ---------------------------------------------------------------------------
 
 fn build_ui(application: &adw::Application) {
     load_css();
@@ -518,7 +513,6 @@ fn build_ui(application: &adw::Application) {
         load_more_button: load_more_button.clone(),
     }));
 
-    // Folder selection.
     let change_folder = gtk::Button::with_label("Change folder");
     change_folder.add_css_class("suggested-action");
     {
@@ -530,8 +524,6 @@ fn build_ui(application: &adw::Application) {
         });
     }
 
-    // Send the debounced query to the worker and prevent stale results from
-    // remaining visible while the next query is pending.
     {
         let ui = Rc::clone(&ui);
         let bridge = Rc::clone(&bridge);
@@ -563,13 +555,11 @@ fn build_ui(application: &adw::Application) {
         });
     }
 
-    // Pagination.
     {
         let ui = Rc::clone(&ui);
         load_more_button.connect_clicked(move |_| ui.borrow_mut().load_more());
     }
 
-    // Layout: left pane (folder + files), right pane (search over results).
     let left = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let left_header = gtk::Box::new(gtk::Orientation::Vertical, 4);
     left_header.set_margin_top(12);
@@ -640,7 +630,6 @@ fn build_ui(application: &adw::Application) {
     main_paned.set_end_child(Some(&right));
     window.set_content(Some(&main_paned));
 
-    // Worker events -> UI (GLib main loop only).
     {
         let ui = Rc::clone(&ui);
         glib::MainContext::default().spawn_local(async move {
@@ -681,7 +670,6 @@ fn build_ui(application: &adw::Application) {
         });
     }
 
-    // Initial scan of the configured path.
     let initial_path = ui.borrow().state.current_path.clone();
     ui.borrow().update_folder_labels();
     bridge.send(WorkerCommand::Scan { root: initial_path });

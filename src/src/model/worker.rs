@@ -5,7 +5,7 @@ use std::sync::{
 use std::time::Duration;
 
 use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock, Semaphore};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
 use crate::model::actions::{WorkerCommand, WorkerEvent};
@@ -14,6 +14,13 @@ use crate::model::search::search_files;
 use crate::model::state::FileEntry;
 
 pub const SEARCH_DEBOUNCE: Duration = Duration::from_millis(300);
+
+fn default_parallelism() -> usize {
+    std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(4)
+        .clamp(2, 8)
+}
 
 pub struct Worker {
     files: Arc<RwLock<Vec<FileEntry>>>,
@@ -34,7 +41,7 @@ impl Default for Worker {
             scan_task: None,
             search_generation: Arc::new(AtomicU64::new(0)),
             scan_generation: Arc::new(AtomicU64::new(0)),
-            extraction_slots: Arc::new(Semaphore::new(1)),
+            extraction_slots: Arc::new(Semaphore::new(default_parallelism())),
         }
     }
 }
@@ -155,85 +162,106 @@ impl Worker {
 
             let file_list = files.read().await.clone();
             let total = file_list.len();
-            let mut results = Vec::new();
+            let progress_step = (total / 40).max(1);
+            let mut join_set = JoinSet::new();
 
-            for (index, file) in file_list.into_iter().enumerate() {
+            for file in file_list {
                 if child_cancel.is_cancelled()
                     || current_generation.load(Ordering::Acquire) != generation
                 {
+                    join_set.abort_all();
                     return;
                 }
 
-                let permit = tokio::select! {
-                    biased;
-                    _ = child_cancel.cancelled() => return,
-                    permit = Arc::clone(&extraction_slots).acquire_owned() => {
-                        match permit {
-                            Ok(permit) => permit,
-                            Err(_) => return,
+                let slots = Arc::clone(&extraction_slots);
+                let cancel_token = child_cancel.clone();
+                let query_for_file = query_for_task.clone();
+
+                join_set.spawn(async move {
+                    let permit: OwnedSemaphorePermit = tokio::select! {
+                        biased;
+                        _ = cancel_token.cancelled() => return Ok(Vec::new()),
+                        permit = slots.acquire_owned() => {
+                            match permit {
+                                Ok(permit) => permit,
+                                Err(_) => return Ok(Vec::new()),
+                            }
+                        }
+                    };
+
+                    if cancel_token.is_cancelled() {
+                        return Ok(Vec::new());
+                    }
+
+                    let relative_path = file.relative_path.clone();
+                    let blocking_res = tokio::task::spawn_blocking(move || {
+                        let _permit = permit;
+                        search_files(std::slice::from_ref(&file), &query_for_file)
+                    })
+                    .await;
+
+                    match blocking_res {
+                        Ok(Ok(matches)) => Ok(matches),
+                        Ok(Err(error)) => {
+                            tracing::warn!(
+                                path = %relative_path,
+                                %error,
+                                "Skipping file due to extraction/search error"
+                            );
+                            Ok(Vec::new())
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                path = %relative_path,
+                                %error,
+                                "Skipping file because extraction task panicked"
+                            );
+                            Ok::<_, ()>(Vec::new())
                         }
                     }
-                };
-                let query_for_file = query_for_task.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    let _permit: OwnedSemaphorePermit = permit;
-                    search_files(std::slice::from_ref(&file), &query_for_file)
-                })
-                .await;
+                });
+            }
 
+            let mut results = Vec::new();
+            let mut completed = 0usize;
+
+            while let Some(joined) = tokio::select! {
+                biased;
+                _ = child_cancel.cancelled() => {
+                    join_set.abort_all();
+                    return;
+                }
+                next = join_set.join_next() => next,
+            } {
                 if child_cancel.is_cancelled()
                     || current_generation.load(Ordering::Acquire) != generation
                 {
+                    join_set.abort_all();
                     return;
                 }
 
-                match result {
-                    Ok(Ok(mut matches)) => results.append(&mut matches),
-                    Ok(Err(error)) => {
-                        let _ = send_search_event(
-                            &events,
-                            &child_cancel,
-                            &current_generation,
-                            generation,
-                            WorkerEvent::SearchError {
-                                query: query_for_task.clone(),
-                                error: error.to_string(),
-                            },
-                        )
-                        .await;
-                        return;
-                    }
-                    Err(error) => {
-                        let _ = send_search_event(
-                            &events,
-                            &child_cancel,
-                            &current_generation,
-                            generation,
-                            WorkerEvent::SearchError {
-                                query: query_for_task.clone(),
-                                error: format!("Search task failed: {error}"),
-                            },
-                        )
-                        .await;
-                        return;
-                    }
+                if let Ok(Ok(mut file_matches)) = joined {
+                    results.append(&mut file_matches);
                 }
 
-                if !send_search_event(
-                    &events,
-                    &child_cancel,
-                    &current_generation,
-                    generation,
-                    WorkerEvent::SearchProgress {
-                        completed: index + 1,
-                        total,
-                    },
-                )
-                .await
-                {
-                    return;
+                completed += 1;
+                if completed == total || completed % progress_step == 0 {
+                    if !send_search_event(
+                        &events,
+                        &child_cancel,
+                        &current_generation,
+                        generation,
+                        WorkerEvent::SearchProgress { completed, total },
+                    )
+                    .await
+                    {
+                        join_set.abort_all();
+                        return;
+                    }
                 }
             }
+
+            results.sort_by(|left, right| left.file_relative_path.cmp(&right.file_relative_path));
 
             let _ = send_search_event(
                 &events,
@@ -299,8 +327,27 @@ pub fn channel(capacity: usize) -> (mpsc::Sender<WorkerCommand>, mpsc::Receiver<
 mod tests {
     use super::*;
     use crate::model::actions::WorkerCommand;
-    use std::fs;
+    use std::fs::File;
+    use std::io::Write;
+    use std::path::Path;
     use tempfile::tempdir;
+    use zip::write::FileOptions;
+    use zip::ZipWriter;
+
+    fn write_test_docx(path: &Path, text: &str) {
+        let file = File::create(path).unwrap();
+        let mut zip = ZipWriter::new(file);
+        zip.start_file("word/document.xml", FileOptions::default())
+            .unwrap();
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                <w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body>
+            </w:document>"#
+        );
+        zip.write_all(xml.as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
 
     #[tokio::test]
     async fn empty_query_completes_without_searching() {
@@ -325,7 +372,7 @@ mod tests {
     #[tokio::test]
     async fn scan_then_search_returns_results() {
         let root = tempdir().unwrap();
-        fs::write(root.path().join("one.txt"), "needle").unwrap();
+        write_test_docx(&root.path().join("one.docx"), "needle");
         let (command_tx, command_rx) = channel(8);
         let (event_tx, mut event_rx) = mpsc::channel(32);
         let worker = tokio::spawn(Worker::default().run(command_rx, event_tx));
@@ -366,7 +413,7 @@ mod tests {
     #[tokio::test]
     async fn newer_query_supersedes_debounced_query() {
         let root = tempdir().unwrap();
-        fs::write(root.path().join("one.txt"), "second").unwrap();
+        write_test_docx(&root.path().join("one.docx"), "second");
         let (command_tx, command_rx) = channel(8);
         let (event_tx, mut event_rx) = mpsc::channel(32);
         let worker = tokio::spawn(Worker::default().run(command_rx, event_tx));
