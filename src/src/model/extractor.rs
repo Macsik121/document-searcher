@@ -130,12 +130,113 @@ fn extract_text_uncached(path: &Path) -> Result<String> {
 }
 
 fn extract_plain_text(path: &Path) -> Result<String> {
-    fs::read_to_string(path).with_context(|| {
-        format!(
-            "Text file is unreadable or is not UTF-8: {}",
-            path.display()
-        )
-    })
+    let bytes =
+        fs::read(path).with_context(|| format!("Cannot read text file: {}", path.display()))?;
+    Ok(decode_text_bytes(&bytes))
+}
+
+/// Decode arbitrary bytes from a `.txt`/`.md`/source file into a `String` as
+/// robustly as possible, so that legacy non-UTF-8 documents (common on Russian
+/// Windows) are still indexed and searchable instead of being skipped.
+///
+/// Decoder layers (first wins):
+/// 1. **BOM fast-path** — UTF-8 / UTF-16LE / UTF-16BE byte-order marks are
+///    authoritative; they decode directly without guessing.
+/// 2. **Strict UTF-8 fast-path** — plain valid UTF-8 (no BOM) is the common
+///    case and returns verbatim. A NUL-ratio guard rejects BOM-less UTF-16,
+///    which would otherwise decode as a UTF-8 string full of NULs.
+/// 3. **`chardetng` detection** — for everything else, a language-model
+///    detector picks the most likely legacy encoding (CP1251 Cyrillic,
+///    KOI8-R, Windows-1252, etc.) and `encoding_rs` decodes it lossily.
+///
+/// This never bails on encoding grounds — only an IO failure in the caller
+/// produces an error. Unmappable bytes become `U+FFFD`.
+fn decode_text_bytes(bytes: &[u8]) -> String {
+    // Layer 1: byte-order mark.
+    if bytes.len() >= 3 && bytes[..3] == [0xEF, 0xBB, 0xBF] {
+        return String::from_utf8_lossy(&bytes[3..]).into_owned();
+    }
+    if bytes.len() >= 2 {
+        if bytes[..2] == [0xFF, 0xFE] {
+            return decode_utf16(bytes[2..].as_ref(), /* little */ true);
+        }
+        if bytes[..2] == [0xFE, 0xFF] {
+            return decode_utf16(bytes[2..].as_ref(), /* little */ false);
+        }
+    }
+
+    // Layer 2: strict UTF-8, guarded against BOM-less UTF-16.
+    if is_likely_strict_utf8(bytes) {
+        if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+            return text;
+        }
+    }
+
+    // Layer 3: detect a legacy encoding and decode it.
+    let mut detector = chardetng::EncodingDetector::new();
+    detector.feed(bytes, true);
+    let encoding = detector.guess(None, true);
+    let mut output = String::with_capacity(bytes.len());
+    let (_text, _enc, _had_errors) = encoding.decode(bytes, &mut output);
+    output
+}
+
+/// Decode UTF-16 bytes (BOM already stripped) into a `String`, replacing
+/// invalid surrogates with `U+FFFD`. `little_endian` selects LE vs BE.
+fn decode_utf16(bytes: &[u8], little_endian: bool) -> String {
+    let mut units = Vec::with_capacity(bytes.len() / 2);
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        let unit = if little_endian {
+            u16::from_le_bytes([bytes[i], bytes[i + 1]])
+        } else {
+            u16::from_be_bytes([bytes[i], bytes[i + 1]])
+        };
+        units.push(unit);
+        i += 2;
+    }
+    if i < bytes.len() {
+        // Trailing odd byte — treat it as a Latin-1 code unit.
+        units.push(u16::from(bytes[i]));
+    }
+    String::from_utf16_lossy(&units)
+}
+
+/// Heuristic gate for the UTF-8 fast-path.
+///
+/// Returns `true` when the bytes are plausibly UTF-8 (or pure ASCII): no
+/// embedded NULs beyond a tiny ratio, and no obviously valid strict-UTF-8
+/// prefix that is actually BOM-less UTF-16. BOM-less UTF-16 text decodes
+/// under UTF-8 as a long run of `'\0'` characters (e.g. `"H\0e\0l\0l\0o\0"`),
+/// so a high NUL ratio signals "skip UTF-8, go to the detector."
+fn is_likely_strict_utf8(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return true;
+    }
+    // A cheap pre-filter: only run the full validation if the bytes look
+    // ASCII-shaped or contain continuation bytes that UTF-8 expects.
+    let mut nul_count = 0usize;
+    let mut high_count = 0usize;
+    const SAMPLE: usize = 4096;
+    let take = bytes.len().min(SAMPLE);
+    for &b in &bytes[..take] {
+        if b == 0 {
+            nul_count += 1;
+        } else if b >= 0x80 {
+            high_count += 1;
+        }
+    }
+    // BOM-less UTF-16 of ASCII text is ~50% NULs; real UTF-8 text has none.
+    if nul_count * 20 > take {
+        return false;
+    }
+    // Pure ASCII: always valid UTF-8.
+    if high_count == 0 {
+        return true;
+    }
+    // Mixed bytes: validate honestly. `from_utf8` on the whole slice below
+    // does the real check; this gate only decides whether to *try* it.
+    true
 }
 
 fn extract_docx_text(path: &Path) -> Result<String> {
@@ -1018,16 +1119,56 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_utf8_in_text_files() {
-        let mut file = NamedTempFile::with_suffix(".txt").unwrap();
-        file.write_all(&[0xff, 0xfe]).unwrap();
+    fn rejects_unsupported_extensions() {
+        let file = NamedTempFile::with_suffix(".odt").unwrap();
         assert!(extract_text(file.path()).is_err());
     }
 
     #[test]
-    fn rejects_unsupported_extensions() {
-        let file = NamedTempFile::with_suffix(".odt").unwrap();
-        assert!(extract_text(file.path()).is_err());
+    fn decodes_cp1251_cyrillic_text() {
+        // "Привет, мир!" encoded in Windows-1251 (CP1251) — the legacy
+        // encoding that Russian Windows still writes `.txt` files in.
+        let cp1251: &[u8] = &[
+            0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2, 0x2C, 0x20, 0xEC, 0xE8, 0xF0, 0x21,
+        ];
+        let text = decode_text_bytes(cp1251);
+        assert!(text.contains("Привет"), "decoded: {text:?}");
+        assert!(text.contains("мир"), "decoded: {text:?}");
+    }
+
+    #[test]
+    fn decodes_utf16le_with_bom() {
+        // "Hello, мир!" as UTF-16LE with a BOM, like Notepad writes it.
+        let bytes: &[u8] = &[
+            0xFF, 0xFE, // BOM: UTF-16LE
+            b'H', 0x00, b'e', 0x00, b'l', 0x00, b'l', 0x00, b'o', 0x00, b',', 0x00, b' ', 0x00,
+            0x3C, 0x04, // м
+            0x38, 0x04, // и
+            0x40, 0x04, // р
+            b'!', 0x00,
+        ];
+        let text = decode_text_bytes(bytes);
+        assert_eq!(text, "Hello, мир!");
+    }
+
+    #[test]
+    fn decodes_bomless_utf16le_ascii() {
+        // BOM-less UTF-16LE of ASCII text — must NOT decode as a NUL-laden
+        // UTF-8 string. The detector/NUL-guard should route it to UTF-16.
+        let bytes: &[u8] = &[b'H', 0x00, b'e', 0x00, b'l', 0x00, b'l', 0x00, b'o', 0x00];
+        let text = decode_text_bytes(bytes);
+        assert_eq!(text.trim_matches('\0'), "Hello");
+        assert!(!text.contains("Hello\0"), "should not keep NULs: {text:?}");
+    }
+
+    #[test]
+    fn plain_text_never_bails_on_encoding() {
+        // Even a stream of pure garbage bytes must decode (lossily) to a
+        // String, never an error — only IO failures can error.
+        let text = decode_text_bytes(&[0xFF, 0xFE, 0xFD, 0xFC, 0x00, 0x80]);
+        // The leading FF FE is a UTF-16LE BOM; the rest is one odd byte,
+        // decoded lossily. We only assert it did not panic / bail.
+        let _ = text;
     }
 
     #[test]

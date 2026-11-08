@@ -44,6 +44,10 @@ pdf-extract = "0.7"
 quick-xml = "0.31"
 walkdir = "2.4"
 zip = "0.6"
+# Text decoding: robust fallback for non-UTF-8 legacy text files
+# (CP1251/Windows-1251 Cyrillic, UTF-16, Latin-1) common on Russian Windows.
+encoding_rs = "0.8"
+chardetng = "0.1"
 
 # Diagnostics
 tracing = "0.1"
