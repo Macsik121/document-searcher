@@ -148,6 +148,9 @@ fn extract_plain_text(path: &Path) -> Result<String> {
 /// 3. **`chardetng` detection** — for everything else, a language-model
 ///    detector picks the most likely legacy encoding (CP1251 Cyrillic,
 ///    KOI8-R, Windows-1252, etc.) and `encoding_rs` decodes it lossily.
+/// 4. **UTF-16 rescue** — if the detector's output is still NUL-heavy (it
+///    can mis-detect short BOM-less UTF-16 as a single-byte encoding), retry
+///    as UTF-16LE/BE and keep whichever yields fewer NULs.
 ///
 /// This never bails on encoding grounds — only an IO failure in the caller
 /// produces an error. Unmappable bytes become `U+FFFD`.
@@ -733,17 +736,25 @@ fn extract_pdf_with_lopdf(path: &Path) -> Result<String> {
     Ok(combined)
 }
 
-fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
-    if let Some(msg) = payload.downcast_ref::<&str>() {
-        (*msg).to_owned()
-    } else if let Some(msg) = payload.downcast_ref::<String>() {
-        msg.clone()
-    } else {
-        "unknown parser panic".to_owned()
-    }
-}
-
 fn extract_pdf_text(path: &Path) -> Result<String> {
+    // Try pdf-extract first for better word boundary preservation.
+    // It does smarter layout analysis than lopdf's raw operator concatenation.
+    let path_for_extract = path.to_path_buf();
+    let extract_result =
+        std::panic::catch_unwind(move || pdf_extract::extract_text(&path_for_extract));
+
+    let pdf_extract_text = match extract_result {
+        Ok(Ok(text)) => {
+            let alpha = count_alphabetic(&text);
+            if alpha >= 32 {
+                return Ok(text);
+            }
+            Some(text)
+        }
+        Ok(Err(_)) | Err(_) => None,
+    };
+
+    // Fallback to lopdf for cases where pdf-extract fails or returns very little.
     let lopdf_text = extract_pdf_with_lopdf(path).ok().unwrap_or_default();
     let lopdf_alpha = count_alphabetic(&lopdf_text);
 
@@ -751,39 +762,12 @@ fn extract_pdf_text(path: &Path) -> Result<String> {
         return Ok(lopdf_text);
     }
 
-    let path_for_extract = path.to_path_buf();
-    let extraction = std::panic::catch_unwind(move || pdf_extract::extract_text(&path_for_extract));
-
-    match extraction {
-        Ok(Ok(text)) => {
-            if count_alphabetic(&text) > lopdf_alpha && !text.trim().is_empty() {
-                return Ok(text);
-            }
-            if !lopdf_text.trim().is_empty() {
-                return Ok(lopdf_text);
-            }
-            if !text.trim().is_empty() {
-                return Ok(text);
-            }
-            extract_scanned_pdf_text(path).context("PDF has no text layer and OCR failed")
-        }
-        Ok(Err(pdf_error)) => {
-            if !lopdf_text.trim().is_empty() {
-                return Ok(lopdf_text);
-            }
-            extract_scanned_pdf_text(path).with_context(|| {
-                format!("PDF text extraction failed ({pdf_error}); OCR fallback also failed")
-            })
-        }
-        Err(panic_payload) => {
-            if !lopdf_text.trim().is_empty() {
-                return Ok(lopdf_text);
-            }
-            let panic_msg = panic_payload_message(panic_payload);
-            extract_scanned_pdf_text(path).with_context(|| {
-                format!("PDF parser panicked ({panic_msg}); OCR fallback also failed")
-            })
-        }
+    // If both found very little, prefer whichever has more text.
+    match pdf_extract_text {
+        Some(extract) if count_alphabetic(&extract) > lopdf_alpha => Ok(extract),
+        _ if !lopdf_text.trim().is_empty() => Ok(lopdf_text),
+        Some(extract) if !extract.trim().is_empty() => Ok(extract),
+        _ => extract_scanned_pdf_text(path).context("PDF has no text layer and OCR failed"),
     }
 }
 
@@ -1129,6 +1113,29 @@ mod tests {
     }
 
     #[test]
+    fn extracts_cp1251_plain_text_from_disk() {
+        // Reproduces the user's failing case: a Russian work-log `.txt` saved
+        // in Windows-1251 (CP1251) on Russian Windows, which `fs::read_to_string`
+        // rejected with "stream did not contain valid UTF-8". The pipeline must
+        // now decode it and make it searchable.
+        let mut file = NamedTempFile::with_suffix(".txt").unwrap();
+        // "Отчёт по работе" in CP1251.
+        let cp1251: &[u8] = &[
+            0xCE, 0xF2, 0xF7, 0xB8, 0xF2, 0x20, 0xEF, 0xEE, 0x20, 0xF0, 0xE0, 0xE1, 0xEE, 0xF2,
+            0xE5,
+        ];
+        file.write_all(cp1251).unwrap();
+        file.flush().unwrap();
+
+        let text = extract_text(file.path()).expect("CP1251 text must extract, not bail");
+        assert!(
+            text.contains("Отчёт"),
+            "decoded text should contain 'Отчёт', got: {text:?}"
+        );
+        assert!(text.contains("работе"), "decoded: {text:?}");
+    }
+
+    #[test]
     fn rejects_unsupported_extensions() {
         let file = NamedTempFile::with_suffix(".odt").unwrap();
         assert!(extract_text(file.path()).is_err());
@@ -1205,5 +1212,209 @@ mod tests {
         assert_eq!(decode_glyph_name("afii10065"), Some('а'));
         assert_eq!(decode_glyph_name("guillemotleft.cap"), Some('«'));
         assert_eq!(decode_glyph_name("hyphen.cap"), Some('-'));
+    }
+
+    /// DIAGNOSTIC ONLY (`#[ignore]`): dumps per-stage text yield for a real
+    /// PDF so we can see exactly which tier of the extractor fails to recover
+    /// text the user knows is present. Run with:
+    ///   $env:DOC_SEARCHER_DIAG_PDF='C:\path\to\file.pdf'
+    ///   cargo test --lib --no-default-features diag_pdf_pipeline -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn diag_pdf_pipeline() {
+        let path = std::env::var("DOC_SEARCHER_DIAG_PDF").unwrap_or_default();
+        if path.trim().is_empty() {
+            eprintln!("Set DOC_SEARCHER_DIAG_PDF to a PDF path to run this diagnostic.");
+            return;
+        }
+        let path = Path::new(&path);
+        let meta = fs::metadata(path).unwrap_or_else(|e| panic!("metadata: {e}"));
+        eprintln!("file: {}", path.display());
+        eprintln!("size: {} bytes ({} KiB)", meta.len(), meta.len() / 1024);
+
+        // Tier 0: lopdf load + page count + builtin/custom per page.
+        let doc = Document::load(path);
+        match &doc {
+            Ok(d) => eprintln!("lopdf load: OK, {} pages", d.get_pages().len()),
+            Err(e) => {
+                eprintln!("lopdf load: ERR {e}");
+            }
+        }
+        let lopdf_text = extract_pdf_with_lopdf(path).ok().unwrap_or_default();
+        let lopdf_alpha = count_alphabetic(&lopdf_text);
+        eprintln!(
+            "lopdf combined: {} chars, {} alphabetic",
+            lopdf_text.chars().count(),
+            lopdf_alpha
+        );
+        eprintln!(
+            "  preview: {:?}",
+            lopdf_text.chars().take(200).collect::<String>()
+        );
+
+        // Per-page breakdown for the lopdf path.
+        if let Ok(d) = &doc {
+            for (&page_num, &page_id) in &d.get_pages() {
+                let builtin = d.extract_text(&[page_num]).unwrap_or_default();
+                let custom = extract_page_custom_text(d, page_id);
+                eprintln!(
+                    "  page {page_num}: builtin_alpha={}, custom_alpha={}, fonts={}",
+                    count_alphabetic(&builtin),
+                    count_alphabetic(&custom),
+                    d.get_page_fonts(page_id).len(),
+                );
+            }
+        }
+
+        // Tier 1: pdf_extract.
+        let path2 = path.to_path_buf();
+        let pe = std::panic::catch_unwind(move || pdf_extract::extract_text(&path2));
+        match &pe {
+            Ok(Ok(t)) => eprintln!(
+                "pdf_extract: OK {} chars, {} alphabetic",
+                t.chars().count(),
+                count_alphabetic(t)
+            ),
+            Ok(Err(e)) => eprintln!("pdf_extract: ERR {e}"),
+            Err(_) => eprintln!("pdf_extract: PANICKED"),
+        }
+
+        // Final pipeline decision.
+        let final_text = extract_text(path);
+        match &final_text {
+            Ok(t) => eprintln!(
+                "FINAL extract_text: OK {} chars, {} alphabetic",
+                t.chars().count(),
+                count_alphabetic(t)
+            ),
+            Err(e) => eprintln!("FINAL extract_text: ERR {e:#}"),
+        }
+
+        // Did the gate short-circuit?
+        eprintln!(
+            "gate: lopdf_alpha({lopdf_alpha}) >= 32 ? {}",
+            lopdf_alpha >= 32
+        );
+    }
+
+    /// DIAGNOSTIC: prove that word-break spaces in extracted PDF text break search.
+    /// This test extracts text from "The Rust Programming Language" PDF and tries
+    /// to find words that are visually present but may be split by spaces.
+    #[test]
+    #[ignore]
+    fn diag_pdf_search_word_breaks() {
+        let pdf_path = std::env::var("DOC_SEARCHER_DIAG_PDF").unwrap_or_else(|_| {
+            r"C:\Users\максим\Documents\programming\literature\books\The-Rust-PL.pdf".to_owned()
+        });
+        let path = Path::new(&pdf_path);
+
+        // First, compare lopdf vs pdf-extract directly to see space ratios.
+        let lopdf_text = extract_pdf_with_lopdf(path).ok().unwrap_or_default();
+        let lopdf_alpha = count_alphabetic(&lopdf_text);
+        let lopdf_spaces = lopdf_text.chars().filter(|&c| c == ' ').count();
+        let lopdf_ratio = if lopdf_alpha > 0 {
+            lopdf_spaces as f64 / lopdf_alpha as f64
+        } else {
+            0.0
+        };
+
+        eprintln!("\n=== lopdf metrics ===");
+        eprintln!(
+            "chars: {}, alphabetic: {}, spaces: {}",
+            lopdf_text.chars().count(),
+            lopdf_alpha,
+            lopdf_spaces
+        );
+        eprintln!(
+            "space_ratio: {:.4} (threshold < 0.08 to trigger pdf-extract)",
+            lopdf_ratio
+        );
+        eprintln!(
+            "preview: {:?}\n",
+            lopdf_text.chars().take(150).collect::<String>()
+        );
+
+        let extract_text = pdf_extract::extract_text(path).ok().unwrap_or_default();
+        let extract_alpha = count_alphabetic(&extract_text);
+        let extract_spaces = extract_text.chars().filter(|&c| c == ' ').count();
+        let extract_ratio = if extract_alpha > 0 {
+            extract_spaces as f64 / extract_alpha as f64
+        } else {
+            0.0
+        };
+
+        eprintln!("=== pdf-extract metrics ===");
+        eprintln!(
+            "chars: {}, alphabetic: {}, spaces: {}",
+            extract_text.chars().count(),
+            extract_alpha,
+            extract_spaces
+        );
+        eprintln!("space_ratio: {:.4}", extract_ratio);
+        eprintln!(
+            "preview: {:?}\n",
+            extract_text.chars().take(150).collect::<String>()
+        );
+
+        // Now test the actual extraction pipeline.
+        let final_text = super::extract_text(path).expect("extraction must succeed");
+
+        // These words appear in the title but may be split by spaces/newlines.
+        let words_to_find = vec!["Rust", "Programming", "Language", "STEVE", "KLABNIK"];
+
+        eprintln!("=== Testing exact substring search in extracted PDF text ===\n");
+        for word in words_to_find {
+            let found_exact = final_text.contains(word);
+            let found_folded = final_text.to_lowercase().contains(&word.to_lowercase());
+
+            // Count occurrences with word boundaries ignored.
+            let pattern = word.to_lowercase();
+            let mut count = 0usize;
+            let mut pos = 0;
+            let lowered = final_text.to_lowercase();
+            while let Some(idx) = lowered[pos..].find(&pattern) {
+                count += 1;
+                pos += idx + 1;
+            }
+
+            eprintln!(
+                "word {:?}: exact={}, folded={}, count={}",
+                word, found_exact, found_folded, count
+            );
+
+            // Show snippet around first occurrence (or first 200 chars if not found).
+            if let Some(idx) = lowered.find(&pattern) {
+                let start = idx.saturating_sub(30);
+                let end = (idx + word.len() + 30).min(final_text.len());
+                eprintln!("  snippet: {:?}", &final_text[start..end]);
+            } else {
+                eprintln!(
+                    "  first 200 chars: {:?}",
+                    final_text.chars().take(200).collect::<String>()
+                );
+            }
+            eprintln!();
+        }
+
+        // Now test the actual search function.
+        use crate::model::search::search_files;
+        use crate::model::state::FileEntry;
+
+        let file_entry = FileEntry {
+            relative_path: "The-Rust-PL.pdf".to_owned(),
+            absolute_path: path.to_path_buf(),
+        };
+
+        eprintln!("=== Testing search_files() function ===\n");
+        for word in &["Rust", "Programming", "language"] {
+            let matches = search_files(std::slice::from_ref(&file_entry), word)
+                .expect("search must not error");
+            eprintln!(
+                "search_files({:?}): {} matches, {} occurrences",
+                word,
+                matches.len(),
+                matches.iter().map(|m| m.occurrences.len()).sum::<usize>()
+            );
+        }
     }
 }
