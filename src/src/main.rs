@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use document_searcher::model;
 use model::scanner::{scan_directory_with_extensions, scan_directory_with_report};
-use model::search::search_files;
+use model::search::search_files_streaming;
 
 #[cfg(feature = "desktop")]
 #[path = "app.rs"]
@@ -70,14 +70,27 @@ fn print_search(root: &Path, query: &str, extensions: Option<&[String]>) -> anyh
         Some(ext) => scan_directory_with_extensions(root, ext)?,
         None => scan_directory_with_report(root)?,
     };
-    let results = search_files(&report.files, query)?;
-    println!("Matches for {query:?}: {} files", results.len());
-    for result in results {
-        println!("\n{}", result.file_relative_path);
-        for occurrence in result.occurrences {
-            println!("  {}", occurrence.snippet);
+    // Stream matches to stdout as each file finishes searching, instead of
+    // buffering the entire corpus and printing only at the end. The header is
+    // printed first so the user sees that search has started; the trailing
+    // total is printed once the core reports completion.
+    println!("Searching {query:?} across {} files…", report.files.len());
+    let mut stdout = std::io::BufWriter::new(std::io::stdout());
+    use std::io::Write;
+    let reported = search_files_streaming(&report.files, query, |result| {
+        writeln!(stdout, "\n{}", result.file_relative_path)?;
+        for occurrence in &result.occurrences {
+            let page_info = occurrence
+                .page
+                .map(|page| format!("  (page {page})"))
+                .unwrap_or_default();
+            writeln!(stdout, "{page_info}  {}", occurrence.snippet)?;
         }
-    }
+        stdout.flush()?;
+        Ok(())
+    })?;
+    stdout.flush()?;
+    println!("\nMatches for {query:?}: {reported} files");
     Ok(())
 }
 

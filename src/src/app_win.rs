@@ -496,11 +496,27 @@ mod win32 {
     }
 }
 
-fn open_file(path: &Path) -> anyhow::Result<()> {
+fn open_file_at_page(path: &Path, page: Option<u32>) -> anyhow::Result<()> {
     let clean = normalize_platform_path(path);
     if !clean.is_file() {
         anyhow::bail!("File does not exist: {}", clean.display());
     }
+
+    // The #page=N fragment for PDFs is only honored by a few viewers (Adobe
+    // Reader, Chrome, Edge, Foxit) when opened via file:// URLs, and passing
+    // such a URI to ShellExecuteW previously produced `code 2` because the
+    // default handler did not accept the fragment. To stay robust across
+    // Yandex Browser and other viewers that ignore the fragment, we open the
+    // plain file path via the OS default handler. The UI still shows the page
+    // number so the user can navigate manually.
+    if let Some(page_num) = page {
+        tracing::debug!(
+            path = %clean.display(),
+            page = page_num,
+            "Opening file at default viewer; page fragment is viewer-dependent"
+        );
+    }
+
     win32::open_with_default_app(&clean)
 }
 
@@ -645,20 +661,56 @@ impl WinUiState {
         self.set_status(SearchStatus::Searching, Some(&progress));
     }
 
+    /// Append a single streamed search result (file with matches) as it's
+    /// found, without waiting for the whole search to complete. Avoids
+    /// duplicates by relative path, since a file could (in theory) be
+    /// reported twice across overlapping generations.
+    fn search_result_found(&mut self, result: SearchMatch) {
+        if self.state.status == SearchStatus::Scanning || self.state.search_query.trim().is_empty()
+        {
+            return;
+        }
+        // De-duplicate by relative path: if the same file already has an
+        // entry, merge occurrences instead of adding a second card.
+        let normalized = SearchMatch {
+            file_relative_path: result.file_relative_path,
+            file_absolute_path: normalize_platform_path(&result.file_absolute_path),
+            contexts: result.contexts,
+            occurrences: result.occurrences,
+        };
+        if let Some(existing) = self
+            .state
+            .search_results
+            .iter_mut()
+            .find(|item| item.file_relative_path == normalized.file_relative_path)
+        {
+            existing.occurrences.extend(normalized.occurrences);
+            existing.contexts.extend(normalized.contexts);
+        } else {
+            self.state.search_results.push(normalized);
+        }
+        self.bump();
+    }
+
     fn search_completed(&mut self, query: String, results: Vec<SearchMatch>) {
         if self.state.search_query != query {
             return;
         }
-        self.state.search_results = results
-            .into_iter()
-            .map(|item| SearchMatch {
-                file_relative_path: item.file_relative_path,
-                file_absolute_path: normalize_platform_path(&item.file_absolute_path),
-                contexts: item.contexts,
-                occurrences: item.occurrences,
-            })
-            .collect();
-        self.state.results_offset = 0;
+        // Results were streamed incrementally via search_result_found; only
+        // apply the batch here if it's non-empty (covers the empty-query and
+        // legacy paths that still send a full batch).
+        if !results.is_empty() {
+            self.state.search_results = results
+                .into_iter()
+                .map(|item| SearchMatch {
+                    file_relative_path: item.file_relative_path,
+                    file_absolute_path: normalize_platform_path(&item.file_absolute_path),
+                    contexts: item.contexts,
+                    occurrences: item.occurrences,
+                })
+                .collect();
+            self.state.results_offset = 0;
+        }
         self.state.error = None;
 
         if query.trim().is_empty() {
@@ -707,7 +759,11 @@ impl Controller {
         self.ui.state.search_query.clear();
         self.ui.state.set_scan_path(clean_folder.clone());
         self.ui.scan_started();
-        self.bridge.send(WorkerCommand::Scan { root: clean_folder });
+        let extensions = self.ui.state.scan_extensions.clone();
+        self.bridge.send(WorkerCommand::Scan {
+            root: clean_folder,
+            extensions,
+        });
     }
 }
 
@@ -793,6 +849,19 @@ fn serialize_state_json(ui: &WinUiState) -> String {
     json.push_str(&format!("\"hasMore\":{},", ui.state.has_more_results()));
     json.push_str(&format!("\"dialogOpen\":{},", ui.folder_dialog_open));
 
+    // Active scan extensions, so the UI dropdown stays in sync with backend
+    // state instead of relying on a JS-only default.
+    json.push_str("\"scanExtensions\":[");
+    for (idx, ext) in ui.state.scan_extensions.iter().enumerate() {
+        if idx > 0 {
+            json.push(',');
+        }
+        json.push('"');
+        json.push_str(&json_escape(ext));
+        json.push('"');
+    }
+    json.push_str("],");
+
     json.push_str("\"files\":[");
     for (idx, file) in ui.state.found_files.iter().enumerate() {
         if idx > 0 {
@@ -820,11 +889,16 @@ fn serialize_state_json(ui: &WinUiState) -> String {
             if occ_idx > 0 {
                 json.push(',');
             }
+            let page_json = match occ.page {
+                Some(p) => format!(",\"page\":{}", p),
+                None => String::new(),
+            };
             json.push_str(&format!(
-                "{{\"before\":\"{}\",\"matched\":\"{}\",\"after\":\"{}\"}}",
+                "{{\"before\":\"{}\",\"matched\":\"{}\",\"after\":\"{}\"{}}}",
                 json_escape(&occ.before),
                 json_escape(&occ.matched),
-                json_escape(&occ.after)
+                json_escape(&occ.after),
+                page_json
             ));
         }
         json.push_str("]}");
@@ -1154,9 +1228,21 @@ fn handle_client(
             write_http_response(&mut stream, "200 OK", "text/plain; charset=utf-8", b"ok");
         }
         ("POST", "/api/open-file") => {
-            let target = PathBuf::from(&req.body);
+            // Body is either a bare path, or "path|page" to open a PDF at a
+            // specific page (e.g. "C:\\docs\\file.pdf|5"). The page fragment
+            // is only honored for PDFs.
+            let (target_path, page) = match req.body.rfind('|') {
+                Some(idx)
+                    if req.body[idx + 1..].chars().all(|c| c.is_ascii_digit())
+                        && !req.body[idx + 1..].is_empty() =>
+                {
+                    let (p, page_str) = req.body.split_at(idx);
+                    (PathBuf::from(p), page_str[1..].parse::<u32>().ok())
+                }
+                _ => (PathBuf::from(&req.body), None),
+            };
             let allowed = match controller.lock() {
-                Ok(guard) => guard.ui.is_indexed_file(&target),
+                Ok(guard) => guard.ui.is_indexed_file(&target_path),
                 Err(_) => false,
             };
             if !allowed {
@@ -1168,8 +1254,13 @@ fn handle_client(
                 );
                 return;
             }
-            if let Err(error) = open_file(&target) {
-                tracing::warn!(%error, path = %target.display(), "Could not open file");
+            if let Err(error) = open_file_at_page(&target_path, page) {
+                tracing::warn!(
+                    %error,
+                    path = %target_path.display(),
+                    page = ?page,
+                    "Could not open file"
+                );
                 if let Ok(mut guard) = controller.lock() {
                     guard.ui.set_error(error.to_string());
                 }
@@ -1242,6 +1333,48 @@ fn handle_client(
                 b"invalid directory",
             );
         }
+        ("POST", "/api/set-extensions") => {
+            // Body is comma-separated list of extensions (e.g. "docx,pdf,txt").
+            // Normalize: strip leading dot, lowercase, dedupe, drop empties,
+            // and keep only extensions the scanner/extractor actually support.
+            use crate::model::constants::ALL_SUPPORTED_EXTENSIONS;
+            let supported: std::collections::HashSet<&str> =
+                ALL_SUPPORTED_EXTENSIONS.iter().copied().collect();
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut extensions: Vec<String> = Vec::new();
+            for raw in req.body.split(',') {
+                let cleaned = raw.trim().trim_start_matches('.').to_ascii_lowercase();
+                if cleaned.is_empty() || !supported.contains(cleaned.as_str()) {
+                    continue;
+                }
+                if seen.insert(cleaned.clone()) {
+                    extensions.push(cleaned);
+                }
+            }
+
+            if extensions.is_empty() {
+                write_http_response(
+                    &mut stream,
+                    "400 Bad Request",
+                    "text/plain; charset=utf-8",
+                    b"no valid extensions",
+                );
+                return;
+            }
+
+            // Re-scan current folder with new extensions. Extensions live only
+            // in AppState.scan_extensions and are passed explicitly to the
+            // worker; no env-var mutation.
+            if let Ok(mut guard) = controller.lock() {
+                guard.ui.state.scan_extensions = extensions.clone();
+                if let Ok(canonical) = guard.ui.state.current_path.canonicalize() {
+                    let clean = normalize_platform_path(&canonical);
+                    guard.start_folder_scan(clean);
+                }
+            }
+
+            write_http_response(&mut stream, "200 OK", "text/plain; charset=utf-8", b"ok");
+        }
         ("POST", "/api/shutdown") => {
             if let Ok(mut shutdown) = shutdown_requested_at.lock() {
                 *shutdown = Some(Instant::now());
@@ -1291,7 +1424,7 @@ pub fn run() {
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
         )
         .with_target(false)
         .compact()
@@ -1306,9 +1439,11 @@ pub fn run() {
         bridge,
     };
     initial_controller.ui.scan_started();
-    initial_controller
-        .bridge
-        .send(WorkerCommand::Scan { root: initial_path });
+    let extensions = initial_controller.ui.state.scan_extensions.clone();
+    initial_controller.bridge.send(WorkerCommand::Scan {
+        root: initial_path,
+        extensions,
+    });
 
     let controller = Arc::new(Mutex::new(initial_controller));
 
@@ -1337,6 +1472,9 @@ pub fn run() {
                             .scan_completed(files, oversized_files, unreadable_entries),
                         WorkerEvent::ScanError(error) => guard.ui.set_error(error),
                         WorkerEvent::SearchStarted { query } => guard.ui.search_started(&query),
+                        WorkerEvent::SearchResultFound { result, .. } => {
+                            guard.ui.search_result_found(result)
+                        }
                         WorkerEvent::SearchProgress { completed, total } => {
                             guard.ui.search_progress(completed, total)
                         }
@@ -1378,7 +1516,7 @@ pub fn run() {
     );
 
     let url = format!("http://127.0.0.1:{port}");
-    tracing::info!(%url, "Document Searcher Windows UI started");
+    tracing::debug!(%url, "Document Searcher Windows UI started");
 
     let profile_dir = std::env::temp_dir().join(format!(
         "document-searcher-win-ui-{}-{}",
@@ -1537,6 +1675,101 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+  .extensions-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 0;
+  }
+  .extensions-toggle-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .hamburger-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #e2e8f0;
+    color: #1e293b;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .hamburger-btn:hover {
+    background: #cbd5e1;
+  }
+  .hamburger-btn[aria-expanded="true"] {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent-hover);
+  }
+  .hamburger-icon {
+    font-size: 16px;
+    line-height: 1;
+    font-weight: 700;
+    letter-spacing: -1px;
+  }
+  .extensions-dropdown {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    min-width: 220px;
+    max-height: 320px;
+    overflow-y: auto;
+    background: #ffffff;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+    padding: 8px;
+    z-index: 50;
+  }
+  .extensions-dropdown.hidden {
+    display: none;
+  }
+  .dropdown-header {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 4px 8px 8px 8px;
+  }
+  .dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+  .dropdown-item:hover {
+    background: var(--accent-soft);
+  }
+  .dropdown-item input[type="checkbox"] {
+    margin: 0;
+    accent-color: var(--accent);
+    width: 15px;
+    height: 15px;
+  }
+  .extensions-summary {
+    font-size: 11px;
+    color: var(--text-muted);
+    flex: 1;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .path-input-row {
     display: flex;
@@ -1744,6 +1977,22 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     padding: 1px 4px;
     border-radius: 3px;
   }
+  .page-number {
+    float: right;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 500;
+    margin-left: 12px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 1px 6px;
+    border-radius: 4px;
+    text-decoration: underline;
+  }
+  .page-number:hover {
+    background: var(--mark-bg);
+  }
   .load-more-wrap {
     padding: 12px 32px 18px 32px;
     text-align: center;
@@ -1778,6 +2027,17 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     <div class="section-caption">Files found in folder</div>
     <div id="filesList" class="files-scroll"></div>
     <div class="sidebar-footer">
+      <div class="extensions-toggle-wrap">
+        <button id="extensionsToggle" class="hamburger-btn" type="button" aria-haspopup="true" aria-expanded="false" title="File types to search">
+          <span class="hamburger-icon" aria-hidden="true">☰</span>
+          <span>File types</span>
+        </button>
+        <span id="extensionsSummary" class="extensions-summary">.docx, .pdf</span>
+        <div id="extensionsDropdown" class="extensions-dropdown hidden" role="menu" aria-label="File types to search">
+          <div class="dropdown-header">Select file types to search</div>
+          <div id="extensionsDropdownList"></div>
+        </div>
+      </div>
       <div class="path-input-row">
         <input
           id="manualPathInput"
@@ -1850,6 +2110,94 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
   const resultsList = document.getElementById("resultsList");
   const loadMoreWrap = document.getElementById("loadMoreWrap");
   const loadMoreBtn = document.getElementById("loadMoreBtn");
+  const extensionsToggle = document.getElementById("extensionsToggle");
+  const extensionsDropdown = document.getElementById("extensionsDropdown");
+  const extensionsDropdownList = document.getElementById("extensionsDropdownList");
+  const extensionsSummary = document.getElementById("extensionsSummary");
+
+  // Supported file extensions - must match ALL_SUPPORTED_EXTENSIONS in scanner.rs
+  const ALL_EXTENSIONS = ["docx", "pdf", "txt", "md", "rs", "toml", "json", "xml", "html", "css", "js", "ts"];
+  let activeExtensions = new Set(["docx", "pdf"]); // Default: only docx and pdf
+  let extensionsHydratedFromState = false;
+
+  function renderExtensionItems() {
+    extensionsDropdownList.innerHTML = "";
+    ALL_EXTENSIONS.forEach(ext => {
+      const item = document.createElement("label");
+      item.className = "dropdown-item";
+      item.setAttribute("role", "menuitemcheckbox");
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = activeExtensions.has(ext);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          activeExtensions.add(ext);
+        } else if (activeExtensions.size > 1) {
+          // Keep at least one extension active.
+          activeExtensions.delete(ext);
+        } else {
+          checkbox.checked = true; // refuse to uncheck the last one
+          return;
+        }
+        updateExtensionsSummary();
+        notifyExtensionsChanged();
+      });
+
+      const label = document.createElement("span");
+      label.textContent = "." + ext;
+
+      item.appendChild(checkbox);
+      item.appendChild(label);
+      extensionsDropdownList.appendChild(item);
+    });
+    updateExtensionsSummary();
+  }
+
+  function updateExtensionsSummary() {
+    const summary = ALL_EXTENSIONS
+      .filter(ext => activeExtensions.has(ext))
+      .map(ext => "." + ext)
+      .join(", ");
+    extensionsSummary.textContent = summary || "none";
+    extensionsSummary.title = summary;
+  }
+
+  function setExtensionsDropdownOpen(open) {
+    extensionsDropdown.classList.toggle("hidden", !open);
+    extensionsToggle.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+
+  extensionsToggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const isOpen = !extensionsDropdown.classList.contains("hidden");
+    setExtensionsDropdownOpen(!isOpen);
+  });
+
+  // Close the dropdown when clicking outside of it.
+  document.addEventListener("click", (event) => {
+    if (extensionsDropdown.classList.contains("hidden")) {
+      return;
+    }
+    if (!extensionsToggle.contains(event.target) && !extensionsDropdown.contains(event.target)) {
+      setExtensionsDropdownOpen(false);
+    }
+  });
+
+  // Close on Escape and allow keyboard users to reach the menu items.
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !extensionsDropdown.classList.contains("hidden")) {
+      setExtensionsDropdownOpen(false);
+      extensionsToggle.focus();
+    }
+  });
+
+  function notifyExtensionsChanged() {
+    const extList = Array.from(activeExtensions).join(",");
+    postApi("/api/set-extensions", extList);
+  }
+
+  renderExtensionItems();
 
   function postApi(endpoint, bodyText, extraHeaders, signal) {
     const headers = Object.assign({
@@ -1866,6 +2214,15 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
 
   function openFile(absPath) {
     postApi("/api/open-file", absPath);
+  }
+
+  // Open a PDF at a specific page (e.g. openFileAtPage("C:\\f.pdf", 5)).
+  function openFileAtPage(absPath, page) {
+    if (page) {
+      postApi("/api/open-file", absPath + "|" + page);
+    } else {
+      postApi("/api/open-file", absPath);
+    }
   }
 
   changeFolderBtn.addEventListener("click", () => {
@@ -1987,6 +2344,21 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
         if (occ.after) {
           snippet.appendChild(document.createTextNode(occ.after));
         }
+
+        // Add page number if available — clickable to open the PDF at that page.
+        if (occ.page) {
+          const pageBtn = document.createElement("button");
+          pageBtn.type = "button";
+          pageBtn.className = "page-number";
+          pageBtn.title = "Open at page " + occ.page;
+          pageBtn.textContent = "Стр. " + occ.page;
+          pageBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openFileAtPage(item.abs, occ.page);
+          });
+          snippet.appendChild(pageBtn);
+        }
+
         card.appendChild(snippet);
       });
 
@@ -2036,6 +2408,35 @@ const INDEX_HTML: &str = r##"<!DOCTYPE html>
     renderFiles(data.files || []);
     renderResults(data.results || []);
     loadMoreWrap.style.display = data.hasMore ? "block" : "none";
+
+    // Hydrate active extensions from backend state on first poll, and any time
+    // the backend set differs from the JS set (e.g. after a rescan triggered
+    // elsewhere). Do not clobber an in-flight user edit that has not yet been
+    // acknowledged by the backend.
+    const backendExtensions = Array.isArray(data.scanExtensions)
+      ? data.scanExtensions.map(s => String(s).replace(/^\./, "").toLowerCase()).filter(Boolean)
+      : [];
+    if (backendExtensions.length > 0) {
+      const backendSet = new Set(backendExtensions);
+      let needsRender = false;
+      if (!extensionsHydratedFromState) {
+        activeExtensions = backendSet;
+        extensionsHydratedFromState = true;
+        needsRender = true;
+      } else {
+        // Only resync when the sets differ AND the dropdown is closed, so an
+        // open menu being edited by the user is not overwritten mid-toggle.
+        const sameSize = activeExtensions.size === backendSet.size;
+        const sameContent = sameSize && [...backendSet].every(e => activeExtensions.has(e));
+        if (!sameContent && extensionsDropdown.classList.contains("hidden")) {
+          activeExtensions = backendSet;
+          needsRender = true;
+        }
+      }
+      if (needsRender) {
+        renderExtensionItems();
+      }
+    }
   }
 
   async function pollState() {

@@ -2,12 +2,12 @@ use std::path::Path;
 
 use walkdir::{DirEntry, WalkDir};
 
+use crate::model::constants::DEFAULT_EXTENSIONS;
 use crate::model::state::FileEntry;
 
 pub const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
 
-/// По умолчанию сканер ищет только файлы .docx и .pdf.
-pub const DEFAULT_EXTENSIONS: &[&str] = &["docx", "pdf"];
+pub use crate::model::constants::ALL_SUPPORTED_EXTENSIONS as UI_SUPPORTED_EXTENSIONS;
 
 #[derive(Debug, Default)]
 pub struct ScanReport {

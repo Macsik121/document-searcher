@@ -265,3 +265,28 @@ utils.rs и window.blp удалены, документация синхрони
         ]
     }
 }
+
+Upd 09.11.2026:
+*DEVELOPMENT_HANDOFF.md*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Улучшения по проекту:
+- Прекратить логирование INFO, а оставвить только WARN и ERROR, чтобы лучше исследовать ошибки.
+- сделать меню по клику с иконкой трёх полосок, на которые надо нажать, и появится выпадающее меню с расширениями текстовых файлов для поиска.
+- исправить извлечение текста и сделать так, чтобы все pdf файлы, включая те, которые содержат текст, и те, которые содержат картинки, на которых текст, были обрвботаны корректно.
+- сделать последовательный вывод результатов поиска на уровне ядра CLI. Мы пытались несколько раз внедрить последовательное появление файлов со вхождениями подстроки в него. Это было неудачно. Может быть это было довольно поверхностно. Может быть, реализация последовательного отобраржения результатов поиска имеет смысл именно на уровне ядра.
+
+2026-11-09T01:57:22.799483Z  WARN Could not open file error=Could not open file:///C:/Users/%D0%BC%D0%B0%D0%BA%D1%81%D0%B8%D0%BC/Documents/school_studying/physics/_-8-klass_-peryshkin-i_-m_-ivanov-a_-i_-2024.pdf#page=127 (ShellExecuteW code 2) path=C:\Users\максим\Documents\school_studying\physics\_-8-klass_-peryshkin-i_-m_-ivanov-a_-i_-2024.pdf
+2026-11-09T02:03:13.319523Z  WARN Could not open file error=Could not open file:///C:/Users/%D0%BC%D0%B0%D0%BA%D1%81%D0%B8%D0%BC/Documents/school_studying/physics/_-8-klass_-peryshkin-i_-m_-ivanov-a_-i_-2024.pdf#page=128 (ShellExecuteW code 2) path=C:\Users\максим\Documents\school_studying\physics\_-8-klass_-peryshkin-i_-m_-ivanov-a_-i_-2024.pdf

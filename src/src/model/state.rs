@@ -6,12 +6,26 @@ pub struct FileEntry {
     pub absolute_path: PathBuf,
 }
 
+/// Represents a single page extracted from a document (PDF/DOCX).
+/// For formats without explicit page breaks (plain text, DOCX), the entire
+/// document is represented as a single page with `number = 1`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedPage {
+    /// 1-indexed page number for display and linking.
+    pub number: u32,
+    /// Text content of this page.
+    pub text: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchOccurrence {
     pub before: String,
     pub matched: String,
     pub after: String,
     pub snippet: String,
+    /// Page number where this occurrence was found (1-indexed).
+    /// `None` for formats without explicit pages (plain text files).
+    pub page: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +72,9 @@ pub struct AppState {
     pub error: Option<String>,
     pub skipped_oversized_files: usize,
     pub skipped_unreadable_entries: usize,
+    /// Active file extensions for scanning (e.g., ["docx", "pdf"]).
+    /// Set via UI or CLI, passed explicitly to scanner to avoid env-var race.
+    pub scan_extensions: Vec<String>,
 }
 
 impl AppState {
@@ -75,6 +92,7 @@ impl AppState {
             error: None,
             skipped_oversized_files: 0,
             skipped_unreadable_entries: 0,
+            scan_extensions: vec!["docx".to_string(), "pdf".to_string()],
         }
     }
 

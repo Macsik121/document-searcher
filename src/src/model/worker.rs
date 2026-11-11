@@ -9,7 +9,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
 use crate::model::actions::{WorkerCommand, WorkerEvent};
-use crate::model::scanner::scan_directory_with_report;
+use crate::model::scanner::scan_directory_with_extensions;
 use crate::model::search::search_files;
 use crate::model::state::FileEntry;
 
@@ -54,7 +54,9 @@ impl Worker {
     ) {
         while let Some(command) = commands.recv().await {
             match command {
-                WorkerCommand::Scan { root } => self.start_scan(root, &events).await,
+                WorkerCommand::Scan { root, extensions } => {
+                    self.start_scan(root, extensions, &events).await
+                }
                 WorkerCommand::QueryChanged { query } => self.start_search(query, &events).await,
                 WorkerCommand::Shutdown => break,
             }
@@ -64,7 +66,12 @@ impl Worker {
         self.cancel_scan();
     }
 
-    async fn start_scan(&mut self, root: std::path::PathBuf, events: &mpsc::Sender<WorkerEvent>) {
+    async fn start_scan(
+        &mut self,
+        root: std::path::PathBuf,
+        extensions: Vec<String>,
+        events: &mpsc::Sender<WorkerEvent>,
+    ) {
         self.cancel_search();
         self.cancel_scan();
         let generation = self.next_scan_generation();
@@ -74,8 +81,10 @@ impl Worker {
         let current_generation = Arc::clone(&self.scan_generation);
         let events = events.clone();
         self.scan_task = Some(tokio::spawn(async move {
-            let result =
-                tokio::task::spawn_blocking(move || scan_directory_with_report(&root)).await;
+            let result = tokio::task::spawn_blocking(move || {
+                scan_directory_with_extensions(&root, &extensions)
+            })
+            .await;
             if current_generation.load(Ordering::Acquire) != generation {
                 return;
             }
@@ -240,11 +249,34 @@ impl Worker {
                     return;
                 }
 
+                completed += 1;
+
                 if let Ok(Ok(mut file_matches)) = joined {
-                    results.append(&mut file_matches);
+                    // Stream each file's matches immediately so the UI can
+                    // append results progressively as they're found.
+                    // search_files() returns one SearchMatch per file (with
+                    // all its occurrences inside), so this is at most one.
+                    for match_entry in file_matches.drain(..) {
+                        results.push(match_entry.clone());
+                        if !send_search_event(
+                            &events,
+                            &child_cancel,
+                            &current_generation,
+                            generation,
+                            WorkerEvent::SearchResultFound {
+                                result: match_entry,
+                                completed,
+                                total,
+                            },
+                        )
+                        .await
+                        {
+                            join_set.abort_all();
+                            return;
+                        }
+                    }
                 }
 
-                completed += 1;
                 if (completed == total || completed.is_multiple_of(progress_step))
                     && !send_search_event(
                         &events,
@@ -269,7 +301,7 @@ impl Worker {
                 generation,
                 WorkerEvent::SearchCompleted {
                     query: query_for_task,
-                    results,
+                    results: Vec::new(), // all results already streamed
                 },
             )
             .await;
@@ -379,6 +411,7 @@ mod tests {
         command_tx
             .send(WorkerCommand::Scan {
                 root: root.path().to_path_buf(),
+                extensions: vec!["docx".to_string(), "pdf".to_string()],
             })
             .await
             .unwrap();
@@ -420,6 +453,7 @@ mod tests {
         command_tx
             .send(WorkerCommand::Scan {
                 root: root.path().to_path_buf(),
+                extensions: vec!["docx".to_string(), "pdf".to_string()],
             })
             .await
             .unwrap();

@@ -295,12 +295,39 @@ impl Ui {
         );
     }
 
+    /// Append a single streamed search result as it's found, without waiting
+    /// for the whole search to complete. De-duplicates by relative path,
+    /// merging occurrences into an existing entry instead of adding a second.
+    fn search_result_found(&mut self, result: SearchMatch) {
+        if self.state.status == SearchStatus::Scanning || self.state.search_query.trim().is_empty()
+        {
+            return;
+        }
+        if let Some(existing) = self
+            .state
+            .search_results
+            .iter_mut()
+            .find(|item| item.file_relative_path == result.file_relative_path)
+        {
+            existing.occurrences.extend(result.occurrences);
+            existing.contexts.extend(result.contexts);
+        } else {
+            self.state.search_results.push(result);
+        }
+        self.render_results();
+    }
+
     fn search_completed(&mut self, query: String, results: Vec<SearchMatch>) {
         if self.state.search_query != query {
             return;
         }
-        self.state.search_results = results;
-        self.state.results_offset = 0;
+        // Results were streamed incrementally via search_result_found; only
+        // apply the batch here if it's non-empty (covers the empty-query and
+        // legacy paths that still send a full batch).
+        if !results.is_empty() {
+            self.state.search_results = results;
+            self.state.results_offset = 0;
+        }
         self.state.error = None;
         self.state.status = if query.trim().is_empty() {
             SearchStatus::Idle
@@ -447,7 +474,11 @@ fn choose_folder(parent: &adw::ApplicationWindow, ui: Rc<RefCell<Ui>>, bridge: R
             state.update_folder_labels();
             state.scan_started();
         }
-        bridge.send(WorkerCommand::Scan { root: path });
+        let extensions = ui.borrow().state.scan_extensions.clone();
+        bridge.send(WorkerCommand::Scan {
+            root: path,
+            extensions,
+        });
     });
 }
 
@@ -651,6 +682,7 @@ fn build_ui(application: &adw::Application) {
                     WorkerEvent::SearchProgress { completed, total } => {
                         ui.search_progress(completed, total)
                     }
+                    WorkerEvent::SearchResultFound { result, .. } => ui.search_result_found(result),
                     WorkerEvent::SearchCompleted { query, results } => {
                         ui.search_completed(query, results)
                     }
@@ -671,8 +703,12 @@ fn build_ui(application: &adw::Application) {
     }
 
     let initial_path = ui.borrow().state.current_path.clone();
+    let extensions = ui.borrow().state.scan_extensions.clone();
     ui.borrow().update_folder_labels();
-    bridge.send(WorkerCommand::Scan { root: initial_path });
+    bridge.send(WorkerCommand::Scan {
+        root: initial_path,
+        extensions,
+    });
 
     window.present();
 }
@@ -681,7 +717,7 @@ pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
         )
         .with_target(false)
         .compact()

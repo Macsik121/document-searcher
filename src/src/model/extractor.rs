@@ -14,11 +14,10 @@ use lopdf::{content::Content, Dictionary, Document, Object, ObjectId};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
+use crate::model::constants::TEXT_EXTENSIONS;
 use crate::model::scanner::MAX_FILE_SIZE;
+use crate::model::state::ExtractedPage;
 
-const TEXT_EXTENSIONS: &[&str] = &[
-    "txt", "md", "rs", "toml", "json", "xml", "html", "css", "js", "ts",
-];
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tiff", "bmp"];
 
 const MAX_CACHED_TEXT_BYTES: usize = 8 * 1024 * 1024;
@@ -32,11 +31,17 @@ struct CacheKey {
 }
 
 type CacheValue = std::result::Result<Arc<String>, String>;
+type PagesCacheValue = std::result::Result<Arc<Vec<ExtractedPage>>, String>;
 
 static TEXT_CACHE: OnceLock<RwLock<HashMap<CacheKey, CacheValue>>> = OnceLock::new();
+static PAGES_CACHE: OnceLock<RwLock<HashMap<CacheKey, PagesCacheValue>>> = OnceLock::new();
 
 fn cache_store() -> &'static RwLock<HashMap<CacheKey, CacheValue>> {
     TEXT_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn pages_cache_store() -> &'static RwLock<HashMap<CacheKey, PagesCacheValue>> {
+    PAGES_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 /// Normalizes Windows extended-length verbatim paths (`\\?\C:\...` and
@@ -98,6 +103,327 @@ pub fn extract_text(path: &Path) -> Result<String> {
     result
 }
 
+/// Extract text with page information from PDF files.
+/// Returns a vector of pages with their text content and page numbers.
+/// For non-PDF files, returns a single page with the entire document text.
+/// Results are cached by (path, size, mtime) like `extract_text`.
+pub fn extract_text_with_pages(path: &Path) -> Result<Vec<ExtractedPage>> {
+    let metadata =
+        fs::metadata(path).with_context(|| format!("Cannot access {}", path.display()))?;
+    if metadata.len() > MAX_FILE_SIZE {
+        anyhow::bail!("File exceeds the 50 MiB extraction limit");
+    }
+
+    let key = CacheKey {
+        path: path.to_path_buf(),
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    };
+
+    if let Ok(guard) = pages_cache_store().read() {
+        if let Some(cached) = guard.get(&key) {
+            return match cached {
+                Ok(pages) => Ok((**pages).clone()),
+                Err(err_msg) => anyhow::bail!("{err_msg}"),
+            };
+        }
+    }
+
+    let result = extract_text_with_pages_uncached(path);
+
+    if let Ok(mut guard) = pages_cache_store().write() {
+        if guard.len() >= MAX_CACHE_ENTRIES {
+            guard.clear();
+        }
+        match &result {
+            Ok(pages) => {
+                let total_bytes: usize = pages.iter().map(|p| p.text.len()).sum();
+                if total_bytes <= MAX_CACHED_TEXT_BYTES {
+                    guard.insert(key, Ok(Arc::new(pages.clone())));
+                }
+            }
+            Err(error) => {
+                guard.insert(key, Err(format!("{error:#}")));
+            }
+        }
+    }
+
+    result
+}
+
+fn extract_text_with_pages_uncached(path: &Path) -> Result<Vec<ExtractedPage>> {
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default();
+
+    if extension.eq_ignore_ascii_case("pdf") {
+        return extract_pdf_text_with_pages(path);
+    }
+
+    // For non-PDF files, return as single page
+    let text = extract_text(path)?;
+    Ok(vec![ExtractedPage { number: 1, text }])
+}
+
+/// Extract text from PDF file with page information.
+/// Uses lopdf for page-by-page extraction, then pdf-extract as a text-layer
+/// fallback, and finally OCR (tesseract/pdftoppm or Windows WinRT) for
+/// scanned/image-based PDFs.
+fn extract_pdf_text_with_pages(path: &Path) -> Result<Vec<ExtractedPage>> {
+    // Try lopdf first to get page-level extraction
+    let lopdf_result = Document::load(path);
+
+    match lopdf_result {
+        Ok(doc) => {
+            // lopdf loaded successfully: extract pages with fallbacks
+            extract_pages_from_lopdf_document(&doc, path)
+        }
+        Err(_) => {
+            // lopdf failed (malformed PDF, encryption, etc.): fallback to pdf-extract
+            // which may succeed where lopdf fails. It returns flat text without pages.
+            tracing::debug!(
+                path = %path.display(),
+                "lopdf failed to load PDF, trying pdf-extract fallback"
+            );
+
+            let path_for_extract = path.to_path_buf();
+            let pe_text =
+                std::panic::catch_unwind(move || pdf_extract::extract_text(&path_for_extract))
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .unwrap_or_default();
+
+            if count_alphabetic(&pe_text) >= 32 {
+                return Ok(vec![ExtractedPage {
+                    number: 1,
+                    text: normalize_whitespace(&pe_text),
+                }]);
+            }
+
+            // No text layer from pdf-extract either: try OCR as last resort
+            extract_scanned_pdf_text_with_pages(path)
+        }
+    }
+}
+
+/// Extract pages from a successfully loaded lopdf Document with per-page
+/// fallback. Each page is extracted via the lopdf text layer first; only
+/// pages whose text layer yields little or no alphabetic content are sent to
+/// OCR, so mixed documents (text page + scanned page) are handled correctly
+/// instead of deciding OCR-vs-text for the whole document by a single
+/// summed alphabetic threshold.
+fn extract_pages_from_lopdf_document(doc: &Document, path: &Path) -> Result<Vec<ExtractedPage>> {
+    let pages = doc.get_pages();
+    if pages.is_empty() {
+        anyhow::bail!("PDF contains 0 pages");
+    }
+
+    let mut extracted_pages = Vec::with_capacity(pages.len());
+    let mut page_numbers: Vec<u32> = pages.keys().copied().collect();
+    page_numbers.sort();
+
+    // Determine which pages have a usable text layer. Pages with very little
+    // alphabetic content are candidates for page-level OCR.
+    const PAGE_TEXT_ALPHA_THRESHOLD: usize = 16;
+
+    let mut ocr_candidates: Vec<u32> = Vec::new();
+    for &page_num in &page_numbers {
+        if let Some(&page_id) = pages.get(&page_num) {
+            let page_text = extract_single_page_text(doc, page_num, page_id);
+            if count_alphabetic(&page_text) < PAGE_TEXT_ALPHA_THRESHOLD {
+                ocr_candidates.push(page_num);
+                // Preserve the page entry even before OCR: an empty page is
+                // valid and OCR may fill it in below.
+                extracted_pages.push(ExtractedPage {
+                    number: page_num,
+                    text: page_text,
+                });
+            } else {
+                extracted_pages.push(ExtractedPage {
+                    number: page_num,
+                    text: page_text,
+                });
+            }
+        }
+    }
+
+    // If some pages are text-thin, try a single pdf-extract pass: it sometimes
+    // recovers text lopdf missed. If it yields real text, keep the per-page
+    // lopdf result for the pages that already had text and fall back to OCR
+    // only for the remaining candidates.
+    if !ocr_candidates.is_empty() {
+        let path_for_extract = path.to_path_buf();
+        let pe_text =
+            std::panic::catch_unwind(move || pdf_extract::extract_text(&path_for_extract))
+                .ok()
+                .and_then(|r| r.ok())
+                .unwrap_or_default();
+        if count_alphabetic(&pe_text) >= 32 {
+            // pdf-extract recovered a text layer but does not report page
+            // numbers. Use it as a flat fallback only when none of the
+            // lopdf pages had usable text; otherwise keep page-accurate
+            // lopdf results and let page-level OCR handle the thin pages.
+            let total_lopdf_alpha: usize = extracted_pages
+                .iter()
+                .map(|p| count_alphabetic(&p.text))
+                .sum();
+            if total_lopdf_alpha < 32 {
+                return Ok(vec![ExtractedPage {
+                    number: 1,
+                    text: normalize_whitespace(&pe_text),
+                }]);
+            }
+        }
+
+        // Page-level OCR for the text-thin pages only. Render the whole PDF
+        // once and OCR the specific page images, so a mixed document does not
+        // pay the OCR cost for pages that already had a text layer.
+        if let Ok(ocr_pages) = ocr_specific_pages(path, &ocr_candidates) {
+            for ocr_page in ocr_pages {
+                if let Some(slot) = extracted_pages
+                    .iter_mut()
+                    .find(|p| p.number == ocr_page.number)
+                {
+                    if count_alphabetic(&ocr_page.text) > count_alphabetic(&slot.text) {
+                        slot.text = ocr_page.text;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(extracted_pages)
+}
+
+/// Render and OCR a specific subset of pages from a PDF, preserving their
+/// original page numbers. Renders the whole document once via `pdftoppm`
+/// (using `-f`/`-l` to bound the range when the candidates are contiguous, or
+/// the full document otherwise) and runs Tesseract only on the rendered
+/// images that correspond to the requested pages. Temporary files are always
+/// removed. On Windows without Tesseract/pdftoppm, returns an empty vector so
+/// the caller can fall back to the document-wide WinRT path.
+#[cfg(any(feature = "ocr", feature = "windows-ocr"))]
+fn ocr_specific_pages(path: &Path, page_numbers: &[u32]) -> Result<Vec<ExtractedPage>> {
+    if page_numbers.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "document-searcher-pdf-pages-{}-{timestamp}",
+        std::process::id()
+    ));
+    fs::create_dir(&directory).with_context(|| {
+        format!(
+            "Could not create temporary PDF rendering directory {}",
+            directory.display()
+        )
+    })?;
+
+    let result: Result<Vec<ExtractedPage>> = (|| {
+        let prefix = directory.join("page");
+        let clean_path = normalize_platform_path(path);
+        let pdftoppm_bin = resolve_pdftoppm_binary();
+        let mut command = Command::new(&pdftoppm_bin);
+        configure_background_command(&mut command);
+        command.args(["-png", "-r", "200"]);
+
+        // Bound the render range when possible to avoid rendering pages we
+        // will not OCR. When candidates are scattered we fall back to the full
+        // document and pick out only the requested page images afterwards.
+        let min_page = *page_numbers.iter().min().expect("non-empty");
+        let max_page = *page_numbers.iter().max().expect("non-empty");
+        if max_page < u32::MAX {
+            command.args(["-f", &min_page.to_string(), "-l", &max_page.to_string()]);
+        }
+        let output = command
+            .arg(&clean_path)
+            .arg(&prefix)
+            .output()
+            .with_context(|| {
+                format!(
+                    "Could not run pdftoppm ({}) for page-level OCR",
+                    pdftoppm_bin.to_string_lossy()
+                )
+            })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "pdftoppm failed with status {}: {}",
+                output.status,
+                stderr.trim()
+            );
+        }
+
+        let mut page_files: Vec<(u32, PathBuf)> = fs::read_dir(&directory)
+            .context("Could not list rendered PDF pages")?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|page| page.extension().is_some_and(|extension| extension == "png"))
+            .filter_map(|page| {
+                let stem = page.file_stem()?.to_str()?;
+                let num_str = stem.rsplit('-').next()?;
+                let num: u32 = num_str.parse().ok()?;
+                Some((num, page))
+            })
+            .filter(|(num, _)| page_numbers.contains(num))
+            .collect();
+        page_files.sort_by_key(|(num, _)| *num);
+
+        let mut extracted_pages = Vec::with_capacity(page_files.len());
+        for (page_num, image_path) in page_files {
+            match extract_image_text(&image_path) {
+                Ok(text) if !text.trim().is_empty() => {
+                    extracted_pages.push(ExtractedPage {
+                        number: page_num,
+                        text: normalize_whitespace(&text),
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        page = page_num,
+                        error = %error,
+                        "Page-level OCR failed for a single page, skipping it"
+                    );
+                }
+            }
+        }
+        Ok(extracted_pages)
+    })();
+
+    let _ = fs::remove_dir_all(&directory);
+    result
+}
+
+#[cfg(not(any(feature = "ocr", feature = "windows-ocr")))]
+fn ocr_specific_pages(_path: &Path, _page_numbers: &[u32]) -> Result<Vec<ExtractedPage>> {
+    Ok(Vec::new())
+}
+
+/// Extract text from a single PDF page using both lopdf builtin and custom decoder.
+fn extract_single_page_text(doc: &Document, page_num: u32, page_id: ObjectId) -> String {
+    let builtin = doc.extract_text(&[page_num]).unwrap_or_default();
+    let custom = extract_page_custom_text(doc, page_id);
+
+    // Normalize whitespace in builtin extraction as well
+    let builtin_normalized = normalize_whitespace(&builtin);
+
+    // Use whichever gives more alphabetic content
+    if count_alphabetic(&custom) >= count_alphabetic(&builtin_normalized)
+        && !custom.trim().is_empty()
+    {
+        custom
+    } else if !builtin_normalized.trim().is_empty() {
+        builtin_normalized
+    } else {
+        String::new()
+    }
+}
+
 fn extract_text_uncached(path: &Path) -> Result<String> {
     let extension = path
         .extension()
@@ -132,7 +458,7 @@ fn extract_text_uncached(path: &Path) -> Result<String> {
 fn extract_plain_text(path: &Path) -> Result<String> {
     let bytes =
         fs::read(path).with_context(|| format!("Cannot read text file: {}", path.display()))?;
-    Ok(decode_text_bytes(&bytes))
+    Ok(normalize_whitespace(&decode_text_bytes(&bytes)))
 }
 
 /// Decode arbitrary bytes from a `.txt`/`.md`/source file into a `String` as
@@ -298,7 +624,7 @@ fn extract_docx_text(path: &Path) -> Result<String> {
         }
     }
 
-    Ok(output)
+    Ok(normalize_whitespace(&output))
 }
 
 // ---------------------------------------------------------------------------
@@ -704,7 +1030,40 @@ fn extract_page_custom_text(doc: &Document, page_id: ObjectId) -> String {
         }
     }
 
-    page_text
+    normalize_whitespace(&page_text)
+}
+
+/// Normalize whitespace in extracted text: collapse multiple spaces into single
+/// space, collapse multiple newlines into single newline, and trim edges.
+fn normalize_whitespace(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut prev_was_space = false;
+    let mut prev_was_newline = false;
+
+    for ch in text.chars() {
+        match ch {
+            ' ' | '\t' => {
+                if !prev_was_space && !prev_was_newline {
+                    result.push(' ');
+                    prev_was_space = true;
+                }
+            }
+            '\n' | '\r' => {
+                if !prev_was_newline {
+                    result.push('\n');
+                    prev_was_newline = true;
+                    prev_was_space = false;
+                }
+            }
+            _ => {
+                result.push(ch);
+                prev_was_space = false;
+                prev_was_newline = false;
+            }
+        }
+    }
+
+    result.trim().to_owned()
 }
 
 fn count_alphabetic(text: &str) -> usize {
@@ -745,11 +1104,12 @@ fn extract_pdf_text(path: &Path) -> Result<String> {
 
     let pdf_extract_text = match extract_result {
         Ok(Ok(text)) => {
-            let alpha = count_alphabetic(&text);
+            let normalized = normalize_whitespace(&text);
+            let alpha = count_alphabetic(&normalized);
             if alpha >= 32 {
-                return Ok(text);
+                return Ok(normalized);
             }
-            Some(text)
+            Some(normalized)
         }
         Ok(Err(_)) | Err(_) => None,
     };
@@ -854,7 +1214,7 @@ for ($i = 0; $i -lt $maxPages; $i++) {
     if text.trim().is_empty() {
         anyhow::bail!("Windows WinRT PDF OCR produced empty text");
     }
-    Ok(text)
+    Ok(normalize_whitespace(&text))
 }
 
 #[cfg(any(feature = "ocr", feature = "windows-ocr"))]
@@ -995,16 +1355,18 @@ fn extract_image_text(path: &Path) -> Result<String> {
     let language_env = std::env::var("DOCUMENT_SEARCHER_OCR_LANG").ok();
     let language = language_env.as_deref().unwrap_or("eng+rus");
 
-    match run_tesseract_cli(&binary, &clean_path, language) {
-        Ok(text) => Ok(text),
+    let raw = match run_tesseract_cli(&binary, &clean_path, language) {
+        Ok(text) => text,
         Err(first_error) if language_env.is_none() => {
             if let Ok(rus_text) = run_tesseract_cli(&binary, &clean_path, "rus") {
-                return Ok(rus_text);
+                rus_text
+            } else {
+                run_tesseract_cli(&binary, &clean_path, "eng").or(Err(first_error))?
             }
-            run_tesseract_cli(&binary, &clean_path, "eng").or(Err(first_error))
         }
-        Err(error) => Err(error),
-    }
+        Err(error) => return Err(error),
+    };
+    Ok(normalize_whitespace(&raw))
 }
 
 #[cfg(not(any(feature = "ocr", feature = "windows-ocr")))]
@@ -1014,6 +1376,27 @@ fn extract_image_text(_path: &Path) -> Result<String> {
 
 #[cfg(any(feature = "ocr", feature = "windows-ocr"))]
 fn extract_scanned_pdf_text(path: &Path) -> Result<String> {
+    let pages = extract_scanned_pdf_text_with_pages(path)?;
+    let mut combined = String::new();
+    for page in pages {
+        combined.push_str(&page.text);
+        combined.push('\n');
+    }
+    if combined.trim().is_empty() {
+        anyhow::bail!("OCR produced no text for scanned PDF");
+    }
+    Ok(combined)
+}
+
+/// OCR a scanned PDF page-by-page, preserving page numbers.
+///
+/// Renders each page to PNG via `pdftoppm` (page-NN.png naming), then runs
+/// `tesseract` on each image. The page number is parsed from the filename,
+/// giving exact page-to-text mapping for "Стр. N" display and deep links.
+/// On Windows, if tesseract/pdftoppm are unavailable, falls back to the
+/// Windows WinRT OCR engine (single consolidated page).
+#[cfg(any(feature = "ocr", feature = "windows-ocr"))]
+fn extract_scanned_pdf_text_with_pages(path: &Path) -> Result<Vec<ExtractedPage>> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -1029,7 +1412,7 @@ fn extract_scanned_pdf_text(path: &Path) -> Result<String> {
         )
     })?;
 
-    let pdftoppm_result = (|| {
+    let pdftoppm_result: Result<Vec<ExtractedPage>> = (|| {
         let prefix = directory.join("page");
         let clean_path = normalize_platform_path(path);
         let pdftoppm_bin = resolve_pdftoppm_binary();
@@ -1055,37 +1438,67 @@ fn extract_scanned_pdf_text(path: &Path) -> Result<String> {
             );
         }
 
-        let mut pages: Vec<PathBuf> = fs::read_dir(&directory)
+        // pdftoppm names pages page-1.png, page-2.png, ... (or page-01.png
+        // when the total has ≥10 pages). Parse the page number from the
+        // filename stem after the last '-'.
+        let mut page_files: Vec<(u32, PathBuf)> = fs::read_dir(&directory)
             .context("Could not list rendered PDF pages")?
             .filter_map(|entry| entry.ok().map(|entry| entry.path()))
             .filter(|page| page.extension().is_some_and(|extension| extension == "png"))
+            .filter_map(|page| {
+                let stem = page.file_stem()?.to_str()?;
+                let num_str = stem.rsplit('-').next()?;
+                let num: u32 = num_str.parse().ok()?;
+                Some((num, page))
+            })
             .collect();
-        pages.sort();
-        if pages.is_empty() {
+        page_files.sort_by_key(|(num, _)| *num);
+        if page_files.is_empty() {
             anyhow::bail!("pdftoppm produced no PDF pages");
         }
 
-        let mut extracted = String::new();
-        for page in pages {
-            extracted.push_str(&extract_image_text(&page)?);
-            extracted.push('\n');
+        let mut extracted_pages = Vec::with_capacity(page_files.len());
+        for (page_num, image_path) in page_files {
+            match extract_image_text(&image_path) {
+                Ok(text) if !text.trim().is_empty() => {
+                    extracted_pages.push(ExtractedPage {
+                        number: page_num,
+                        text,
+                    });
+                }
+                Ok(_) => {} // skip empty pages (e.g. blank separators)
+                Err(error) => {
+                    tracing::warn!(
+                        page = page_num,
+                        error = %error,
+                        "OCR failed for a single page, skipping it"
+                    );
+                }
+            }
         }
-        if extracted.trim().is_empty() {
-            anyhow::bail!("OCR produced no text for scanned PDF");
+        if extracted_pages.is_empty() {
+            anyhow::bail!("OCR produced no text for any page of the scanned PDF");
         }
-        Ok(extracted)
+        Ok(extracted_pages)
     })();
 
     let _ = fs::remove_dir_all(&directory);
 
-    if pdftoppm_result.is_ok() {
-        return pdftoppm_result;
+    if let Ok(pages) = pdftoppm_result {
+        return Ok(pages);
     }
 
+    // Windows WinRT fallback: produces one consolidated text blob without
+    // page boundaries. Expose it as page 1 so results are still searchable.
     #[cfg(target_os = "windows")]
     {
         if let Ok(winrt_text) = extract_scanned_pdf_via_windows_winrt(path) {
-            return Ok(winrt_text);
+            if !winrt_text.trim().is_empty() {
+                return Ok(vec![ExtractedPage {
+                    number: 1,
+                    text: winrt_text,
+                }]);
+            }
         }
     }
 
@@ -1093,7 +1506,14 @@ fn extract_scanned_pdf_text(path: &Path) -> Result<String> {
 }
 
 #[cfg(not(any(feature = "ocr", feature = "windows-ocr")))]
-fn extract_scanned_pdf_text(_path: &Path) -> Result<String> {
+fn extract_scanned_pdf_text(path: &Path) -> Result<String> {
+    let _ = path;
+    anyhow::bail!("PDF has no text layer; scanned-PDF OCR requires the ocr feature and pdftoppm")
+}
+
+#[cfg(not(any(feature = "ocr", feature = "windows-ocr")))]
+fn extract_scanned_pdf_text_with_pages(path: &Path) -> Result<Vec<ExtractedPage>> {
+    let _ = path;
     anyhow::bail!("PDF has no text layer; scanned-PDF OCR requires the ocr feature and pdftoppm")
 }
 
@@ -1212,209 +1632,5 @@ mod tests {
         assert_eq!(decode_glyph_name("afii10065"), Some('а'));
         assert_eq!(decode_glyph_name("guillemotleft.cap"), Some('«'));
         assert_eq!(decode_glyph_name("hyphen.cap"), Some('-'));
-    }
-
-    /// DIAGNOSTIC ONLY (`#[ignore]`): dumps per-stage text yield for a real
-    /// PDF so we can see exactly which tier of the extractor fails to recover
-    /// text the user knows is present. Run with:
-    ///   $env:DOC_SEARCHER_DIAG_PDF='C:\path\to\file.pdf'
-    ///   cargo test --lib --no-default-features diag_pdf_pipeline -- --ignored --nocapture
-    #[test]
-    #[ignore]
-    fn diag_pdf_pipeline() {
-        let path = std::env::var("DOC_SEARCHER_DIAG_PDF").unwrap_or_default();
-        if path.trim().is_empty() {
-            eprintln!("Set DOC_SEARCHER_DIAG_PDF to a PDF path to run this diagnostic.");
-            return;
-        }
-        let path = Path::new(&path);
-        let meta = fs::metadata(path).unwrap_or_else(|e| panic!("metadata: {e}"));
-        eprintln!("file: {}", path.display());
-        eprintln!("size: {} bytes ({} KiB)", meta.len(), meta.len() / 1024);
-
-        // Tier 0: lopdf load + page count + builtin/custom per page.
-        let doc = Document::load(path);
-        match &doc {
-            Ok(d) => eprintln!("lopdf load: OK, {} pages", d.get_pages().len()),
-            Err(e) => {
-                eprintln!("lopdf load: ERR {e}");
-            }
-        }
-        let lopdf_text = extract_pdf_with_lopdf(path).ok().unwrap_or_default();
-        let lopdf_alpha = count_alphabetic(&lopdf_text);
-        eprintln!(
-            "lopdf combined: {} chars, {} alphabetic",
-            lopdf_text.chars().count(),
-            lopdf_alpha
-        );
-        eprintln!(
-            "  preview: {:?}",
-            lopdf_text.chars().take(200).collect::<String>()
-        );
-
-        // Per-page breakdown for the lopdf path.
-        if let Ok(d) = &doc {
-            for (&page_num, &page_id) in &d.get_pages() {
-                let builtin = d.extract_text(&[page_num]).unwrap_or_default();
-                let custom = extract_page_custom_text(d, page_id);
-                eprintln!(
-                    "  page {page_num}: builtin_alpha={}, custom_alpha={}, fonts={}",
-                    count_alphabetic(&builtin),
-                    count_alphabetic(&custom),
-                    d.get_page_fonts(page_id).len(),
-                );
-            }
-        }
-
-        // Tier 1: pdf_extract.
-        let path2 = path.to_path_buf();
-        let pe = std::panic::catch_unwind(move || pdf_extract::extract_text(&path2));
-        match &pe {
-            Ok(Ok(t)) => eprintln!(
-                "pdf_extract: OK {} chars, {} alphabetic",
-                t.chars().count(),
-                count_alphabetic(t)
-            ),
-            Ok(Err(e)) => eprintln!("pdf_extract: ERR {e}"),
-            Err(_) => eprintln!("pdf_extract: PANICKED"),
-        }
-
-        // Final pipeline decision.
-        let final_text = extract_text(path);
-        match &final_text {
-            Ok(t) => eprintln!(
-                "FINAL extract_text: OK {} chars, {} alphabetic",
-                t.chars().count(),
-                count_alphabetic(t)
-            ),
-            Err(e) => eprintln!("FINAL extract_text: ERR {e:#}"),
-        }
-
-        // Did the gate short-circuit?
-        eprintln!(
-            "gate: lopdf_alpha({lopdf_alpha}) >= 32 ? {}",
-            lopdf_alpha >= 32
-        );
-    }
-
-    /// DIAGNOSTIC: prove that word-break spaces in extracted PDF text break search.
-    /// This test extracts text from "The Rust Programming Language" PDF and tries
-    /// to find words that are visually present but may be split by spaces.
-    #[test]
-    #[ignore]
-    fn diag_pdf_search_word_breaks() {
-        let pdf_path = std::env::var("DOC_SEARCHER_DIAG_PDF").unwrap_or_else(|_| {
-            r"C:\Users\максим\Documents\programming\literature\books\The-Rust-PL.pdf".to_owned()
-        });
-        let path = Path::new(&pdf_path);
-
-        // First, compare lopdf vs pdf-extract directly to see space ratios.
-        let lopdf_text = extract_pdf_with_lopdf(path).ok().unwrap_or_default();
-        let lopdf_alpha = count_alphabetic(&lopdf_text);
-        let lopdf_spaces = lopdf_text.chars().filter(|&c| c == ' ').count();
-        let lopdf_ratio = if lopdf_alpha > 0 {
-            lopdf_spaces as f64 / lopdf_alpha as f64
-        } else {
-            0.0
-        };
-
-        eprintln!("\n=== lopdf metrics ===");
-        eprintln!(
-            "chars: {}, alphabetic: {}, spaces: {}",
-            lopdf_text.chars().count(),
-            lopdf_alpha,
-            lopdf_spaces
-        );
-        eprintln!(
-            "space_ratio: {:.4} (threshold < 0.08 to trigger pdf-extract)",
-            lopdf_ratio
-        );
-        eprintln!(
-            "preview: {:?}\n",
-            lopdf_text.chars().take(150).collect::<String>()
-        );
-
-        let extract_text = pdf_extract::extract_text(path).ok().unwrap_or_default();
-        let extract_alpha = count_alphabetic(&extract_text);
-        let extract_spaces = extract_text.chars().filter(|&c| c == ' ').count();
-        let extract_ratio = if extract_alpha > 0 {
-            extract_spaces as f64 / extract_alpha as f64
-        } else {
-            0.0
-        };
-
-        eprintln!("=== pdf-extract metrics ===");
-        eprintln!(
-            "chars: {}, alphabetic: {}, spaces: {}",
-            extract_text.chars().count(),
-            extract_alpha,
-            extract_spaces
-        );
-        eprintln!("space_ratio: {:.4}", extract_ratio);
-        eprintln!(
-            "preview: {:?}\n",
-            extract_text.chars().take(150).collect::<String>()
-        );
-
-        // Now test the actual extraction pipeline.
-        let final_text = super::extract_text(path).expect("extraction must succeed");
-
-        // These words appear in the title but may be split by spaces/newlines.
-        let words_to_find = vec!["Rust", "Programming", "Language", "STEVE", "KLABNIK"];
-
-        eprintln!("=== Testing exact substring search in extracted PDF text ===\n");
-        for word in words_to_find {
-            let found_exact = final_text.contains(word);
-            let found_folded = final_text.to_lowercase().contains(&word.to_lowercase());
-
-            // Count occurrences with word boundaries ignored.
-            let pattern = word.to_lowercase();
-            let mut count = 0usize;
-            let mut pos = 0;
-            let lowered = final_text.to_lowercase();
-            while let Some(idx) = lowered[pos..].find(&pattern) {
-                count += 1;
-                pos += idx + 1;
-            }
-
-            eprintln!(
-                "word {:?}: exact={}, folded={}, count={}",
-                word, found_exact, found_folded, count
-            );
-
-            // Show snippet around first occurrence (or first 200 chars if not found).
-            if let Some(idx) = lowered.find(&pattern) {
-                let start = idx.saturating_sub(30);
-                let end = (idx + word.len() + 30).min(final_text.len());
-                eprintln!("  snippet: {:?}", &final_text[start..end]);
-            } else {
-                eprintln!(
-                    "  first 200 chars: {:?}",
-                    final_text.chars().take(200).collect::<String>()
-                );
-            }
-            eprintln!();
-        }
-
-        // Now test the actual search function.
-        use crate::model::search::search_files;
-        use crate::model::state::FileEntry;
-
-        let file_entry = FileEntry {
-            relative_path: "The-Rust-PL.pdf".to_owned(),
-            absolute_path: path.to_path_buf(),
-        };
-
-        eprintln!("=== Testing search_files() function ===\n");
-        for word in &["Rust", "Programming", "language"] {
-            let matches = search_files(std::slice::from_ref(&file_entry), word)
-                .expect("search must not error");
-            eprintln!(
-                "search_files({:?}): {} matches, {} occurrences",
-                word,
-                matches.len(),
-                matches.iter().map(|m| m.occurrences.len()).sum::<usize>()
-            );
-        }
     }
 }
